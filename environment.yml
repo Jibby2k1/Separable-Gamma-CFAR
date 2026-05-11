@@ -166,6 +166,7 @@ dependencies:
   - parso=0.8.4=py310h06a4308_0
   - pcre2=10.42=hebb0a14_1
   - pexpect=4.8.0=pyhd3eb1b0_3
+  - pytest
   - pillow=11.1.0=py310hac6e08b_1
   - pip=25.1=pyhc872135_2
   - platformdirs=4.3.7=py310h06a4308_0

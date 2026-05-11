@@ -1,4 +1,4 @@
-// Interactive neuron-first review app for calcium_video_2.
+// Interactive neuron-first review app data generation.
 //
 // This script builds stable candidate neuron footprints from an aggregate
 // robust-z projection, extracts raw and local-background-corrected traces,
@@ -19,11 +19,28 @@ import java.nio.file.Path
 import java.nio.file.Paths
 import java.util.ArrayDeque
 import java.util.Arrays
+import java.util.Locale
 
-final Path projectRoot = Paths.get("/home/jibby2k1/CNEL/State Analysis (Fish)/Separable-Gamma-CFAR")
-final Path rawPath = projectRoot.resolve("Inputs/050126/050126/calcium video 2.tif")
-final Path zPath = projectRoot.resolve("Outputs/CandidateEventPipeline/calcium_video_2/calcium_video_2_sigma06_robust_positive_z_float32.tif")
-final Path outputDir = projectRoot.resolve("Outputs/NeuronReview/calcium_video_2/app")
+static String setting(String key, String fallback) {
+    String envKey = "NEUROBENCH_" + key.toUpperCase(Locale.ROOT).replaceAll("[^A-Z0-9]+", "_")
+    String envValue = System.getenv(envKey)
+    if (envValue != null && !envValue.isBlank()) return envValue
+    String propValue = System.getProperty("neurobench." + key)
+    if (propValue != null && !propValue.isBlank()) return propValue
+    return fallback
+}
+
+static Path resolvePath(Path projectRoot, String value) {
+    Path path = Paths.get(value)
+    return path.isAbsolute() ? path : projectRoot.resolve(path)
+}
+
+final Path projectRoot = Paths.get(setting("project_root", "/home/jibby2k1/CNEL/State Analysis (Fish)/Separable-Gamma-CFAR"))
+final String datasetId = setting("dataset_id", "calcium_video_2")
+final Path outputRoot = resolvePath(projectRoot, setting("output_root", "Outputs"))
+final Path rawPath = resolvePath(projectRoot, setting("raw_video", "Inputs/050126/050126/calcium video 2.tif"))
+final Path zPath = resolvePath(projectRoot, setting("source_z_stack", outputRoot.resolve("CandidateEventPipeline").resolve(datasetId).resolve("${datasetId}_sigma06_robust_positive_z_float32.tif").toString()))
+final Path outputDir = resolvePath(projectRoot, setting("app_dir", outputRoot.resolve("NeuronReview").resolve(datasetId).resolve("app").toString()))
 final Path frameDir = outputDir.resolve("frames")
 final Path evidenceDir = outputDir.resolve("evidence")
 
@@ -72,10 +89,110 @@ static double madSigma(double[] values, double center) {
     return Math.max(1.0e-6d, 1.4826d * median(dev))
 }
 
+static double clamp01(double value) {
+    if (value < 0.0d) return 0.0d
+    if (value > 1.0d) return 1.0d
+    return value
+}
+
+static double roundTo(double value, int places) {
+    double scale = Math.pow(10.0d, places)
+    return Math.round(value * scale) / scale
+}
+
+static double correlation(double[] a, double[] b) {
+    int n = Math.min(a.length, b.length)
+    if (n < 3) return 0.0d
+    double ma = 0.0d
+    double mb = 0.0d
+    for (int i = 0; i < n; i++) {
+        ma += a[i]
+        mb += b[i]
+    }
+    ma /= n
+    mb /= n
+    double num = 0.0d
+    double va = 0.0d
+    double vb = 0.0d
+    for (int i = 0; i < n; i++) {
+        double da = a[i] - ma
+        double db = b[i] - mb
+        num += da * db
+        va += da * da
+        vb += db * db
+    }
+    double den = Math.sqrt(Math.max(1.0e-12d, va * vb))
+    return num / den
+}
+
 static int clampByte(double value) {
     if (value < 0.0d) return 0
     if (value > 255.0d) return 255
     return Math.round(value) as int
+}
+
+static double meanFeature(List<Integer> pixels, float[] feature) {
+    if (pixels.isEmpty()) return 0.0d
+    double sum = 0.0d
+    pixels.each { idx -> sum += feature[idx] as double }
+    return sum / pixels.size()
+}
+
+static float[] localCorrelationMap(float[][] frames, int width, int height, float[] rawMean, float[] rawStd) {
+    int pixels = width * height
+    float[] corr = new float[pixels]
+    int[] dxs = [1, 0, -1, 0] as int[]
+    int[] dys = [0, 1, 0, -1] as int[]
+    for (int y = 0; y < height; y++) {
+        for (int x = 0; x < width; x++) {
+            int idx = y * width + x
+            double total = 0.0d
+            int count = 0
+            for (int k = 0; k < dxs.length; k++) {
+                int nx = x + dxs[k]
+                int ny = y + dys[k]
+                if (nx < 0 || nx >= width || ny < 0 || ny >= height) continue
+                int nidx = ny * width + nx
+                double den = Math.max(1.0e-9d, (rawStd[idx] as double) * (rawStd[nidx] as double))
+                double num = 0.0d
+                for (int t = 0; t < frames.length; t++) {
+                    num += ((frames[t][idx] as double) - (rawMean[idx] as double)) * ((frames[t][nidx] as double) - (rawMean[nidx] as double))
+                }
+                total += num / Math.max(1, frames.length - 1) / den
+                count++
+            }
+            corr[idx] = (float) clamp01((count ? total / count : 0.0d) * 0.5d + 0.5d)
+        }
+    }
+    return corr
+}
+
+static Map<String, Object> bestRigidShift(float[] frame, float[] ref, int width, int height, int maxShift, int step) {
+    int bestDx = 0
+    int bestDy = 0
+    double bestErr = Double.POSITIVE_INFINITY
+    for (int dy = -maxShift; dy <= maxShift; dy++) {
+        for (int dx = -maxShift; dx <= maxShift; dx++) {
+            double err = 0.0d
+            int count = 0
+            for (int y = maxShift; y < height - maxShift; y += step) {
+                int row = y * width
+                int shiftedRow = (y + dy) * width
+                for (int x = maxShift; x < width - maxShift; x += step) {
+                    double d = (frame[shiftedRow + x + dx] as double) - (ref[row + x] as double)
+                    err += d * d
+                    count++
+                }
+            }
+            err /= Math.max(1, count)
+            if (err < bestErr) {
+                bestErr = err
+                bestDx = dx
+                bestDy = dy
+            }
+        }
+    }
+    return [dx: bestDx, dy: bestDy, error: bestErr]
 }
 
 static float[] boxSmooth3x3(float[] src, int width, int height) {
@@ -327,6 +444,7 @@ final int pixelsPerFrame = width * height
 println("Reading ${frames} raw frames into memory")
 float[][] rawFrames = new float[frames][]
 double[] frameMean = new double[frames]
+double[] frameMax = new double[frames]
 double[] rawSum = new double[pixelsPerFrame]
 double[] rawSumSq = new double[pixelsPerFrame]
 float[] rawMax = new float[pixelsPerFrame]
@@ -334,14 +452,17 @@ for (int f = 1; f <= frames; f++) {
     float[] pix = pixelsAsFloat(rawImp, f)
     rawFrames[f - 1] = pix
     double sum = 0.0d
+    double maxValue = Double.NEGATIVE_INFINITY
     for (int i = 0; i < pix.length; i++) {
         double value = pix[i] as double
         sum += value
+        if (value > maxValue) maxValue = value
         rawSum[i] += value
         rawSumSq[i] += value * value
         if (f == 1 || value > (rawMax[i] as double)) rawMax[i] = (float) value
     }
     frameMean[f - 1] = sum / pix.length
+    frameMax[f - 1] = maxValue
     writePng(pix, width, height, frameDir.resolve(String.format("frame_%03d.png", f)))
 }
 
@@ -352,6 +473,29 @@ for (int i = 0; i < pixelsPerFrame; i++) {
     double var = Math.max(0.0d, rawSumSq[i] / frames - mean * mean)
     rawMean[i] = (float) mean
     rawStd[i] = (float) Math.sqrt(var)
+}
+
+println("Computing local correlation, saturation, and drift QC")
+float[] localCorrelation = localCorrelationMap(rawFrames, width, height, rawMean, rawStd)
+float[] driftReference = new float[pixelsPerFrame]
+int refFrames = Math.min(5, frames)
+for (int t = 0; t < refFrames; t++) {
+    for (int i = 0; i < pixelsPerFrame; i++) driftReference[i] += (float) ((rawFrames[t][i] as double) / refFrames)
+}
+List<Map<String, Object>> driftTrace = []
+double[] driftMagnitude = new double[frames]
+for (int t = 0; t < frames; t++) {
+    Map<String, Object> shift = bestRigidShift(rawFrames[t], driftReference, width, height, 4, 4)
+    double mag = Math.sqrt(((shift.dx as Number).doubleValue() * (shift.dx as Number).doubleValue()) + ((shift.dy as Number).doubleValue() * (shift.dy as Number).doubleValue()))
+    driftMagnitude[t] = mag
+    driftTrace.add([frame: t + 1, dx: shift.dx, dy: shift.dy, magnitude: roundTo(mag, 3), error: roundTo((shift.error as Number).doubleValue(), 3)])
+}
+double saturationThreshold = percentile(rawMax, 0.999d)
+double[] saturationFraction = new double[frames]
+for (int t = 0; t < frames; t++) {
+    int saturated = 0
+    for (int i = 0; i < pixelsPerFrame; i++) if ((rawFrames[t][i] as double) >= saturationThreshold) saturated++
+    saturationFraction[t] = saturated / Math.max(1.0d, pixelsPerFrame as double)
 }
 
 println("Building aggregate robust-z projection from ${zPath.fileName}")
@@ -469,16 +613,21 @@ float[] nMaxZ = normalize01(maxZ)
 float[] nStd = normalize01(rawStd)
 float[] nActive = normalize01(activeCountFloat)
 float[] nUncovered = normalize01(uncoveredScore)
+float[] nLocalCorrelation = normalize01(localCorrelation)
+float[] eventSupportMap = new float[pixelsPerFrame]
 float[] discoveryScore = new float[pixelsPerFrame]
 for (int i = 0; i < pixelsPerFrame; i++) {
+    eventSupportMap[i] = (float) clamp01(0.55d * (nActive[i] as double) + 0.25d * (nMaxZ[i] as double) + 0.20d * (nLocalCorrelation[i] as double))
     discoveryScore[i] = blockedByRoi[i] ? 0.0f : (float) (
         0.40d * (nMaxZ[i] as double) +
-        0.25d * (nStd[i] as double) +
+        0.20d * (nStd[i] as double) +
         0.20d * (nActive[i] as double) +
-        0.15d * (nUncovered[i] as double)
+        0.15d * (nUncovered[i] as double) +
+        0.05d * (nLocalCorrelation[i] as double)
     )
 }
 discoveryScore = boxSmooth3x3(discoveryScore, width, height)
+eventSupportMap = boxSmooth3x3(eventSupportMap, width, height)
 
 writePng(rawMean, width, height, evidenceDir.resolve("mean_projection.png"))
 writePng(rawMax, width, height, evidenceDir.resolve("max_projection.png"))
@@ -487,6 +636,8 @@ writePng(activeCountFloat, width, height, evidenceDir.resolve("peak_count_z_ge_2
 writePng(maxZ, width, height, evidenceDir.resolve("robust_z_max.png"))
 writePng(uncoveredScore, width, height, evidenceDir.resolve("uncovered_robust_z_score.png"))
 writePng(localContrast, width, height, evidenceDir.resolve("local_contrast_proxy.png"))
+writePng(localCorrelation, width, height, evidenceDir.resolve("local_correlation.png"))
+writePng(eventSupportMap, width, height, evidenceDir.resolve("event_triggered_support.png"))
 writePng(discoveryScore, width, height, evidenceDir.resolve("discovery_score.png"))
 
 List<Map<String, Object>> discoverySuggestions = []
@@ -540,6 +691,18 @@ suggestionPeaks.each { seedIdx ->
     int bboxW = maxX - minX + 1
     int bboxH = maxY - minY + 1
     double aspect = Math.max(bboxW, bboxH) / Math.max(1.0d, Math.min(bboxW, bboxH) as double)
+    double compactness = clamp01(region.size() / Math.max(1.0d, (bboxW * bboxH) as double))
+    double localCorrMean = meanFeature(region, localCorrelation)
+    double eventSupport = meanFeature(region, eventSupportMap)
+    double artifactScore = clamp01((aspect > 4.0d ? 0.45d : 0.0d) + (localCorrMean < 0.45d ? 0.25d : 0.0d) + (maxRaw >= percentile(rawMax, 0.998d) ? 0.25d : 0.0d))
+    double priorityScore = clamp01(
+        0.25d * seedScore +
+        0.25d * localCorrMean +
+        0.25d * eventSupport +
+        0.15d * compactness +
+        0.10d * (activeCount[seedIdx] / Math.max(1.0d, frames as double)) -
+        0.20d * artifactScore
+    )
     String artifactCue = "none"
     if (minX <= 1 || minY <= 1 || maxX >= width - 2 || maxY >= height - 2) artifactCue = "border"
     else if (aspect > 4.0d) artifactCue = "elongated_structure"
@@ -551,6 +714,11 @@ suggestionPeaks.each { seedIdx ->
         centroidY: Math.round((sumY / region.size()) * 10.0d) / 10.0d,
         area: region.size(),
         discoveryScore: Math.round(seedScore * 1000.0d) / 1000.0d,
+        localCorrelationMean: roundTo(localCorrMean, 3),
+        eventSupport: roundTo(eventSupport, 3),
+        compactness: roundTo(compactness, 3),
+        artifactScore: roundTo(artifactScore, 3),
+        priorityScore: roundTo(priorityScore, 3),
         maxZ: Math.round((maxZ[seedIdx] as double) * 100.0d) / 100.0d,
         activeFrames: activeCount[seedIdx],
         bbox: [minX, minY, maxX, maxY],
@@ -562,8 +730,8 @@ suggestionPeaks.each { seedIdx ->
         }
     ])
 }
-Files.write(outputDir.resolve("discovery_suggestions.tsv"), ("suggestion_id\tcentroid_x\tcentroid_y\tarea\tdiscovery_score\tmax_z\tactive_frames\tartifact_cue\n" +
-    discoverySuggestions.collect { s -> "${s.id}\t${s.centroidX}\t${s.centroidY}\t${s.area}\t${s.discoveryScore}\t${s.maxZ}\t${s.activeFrames}\t${s.artifactCue}" }.join("\n") + "\n").getBytes("UTF-8"))
+Files.write(outputDir.resolve("discovery_suggestions.tsv"), ("suggestion_id\tcentroid_x\tcentroid_y\tarea\tdiscovery_score\tpriority_score\tlocal_correlation_mean\tevent_support\tartifact_score\tmax_z\tactive_frames\tartifact_cue\n" +
+    discoverySuggestions.collect { s -> "${s.id}\t${s.centroidX}\t${s.centroidY}\t${s.area}\t${s.discoveryScore}\t${s.priorityScore}\t${s.localCorrelationMean}\t${s.eventSupport}\t${s.artifactScore}\t${s.maxZ}\t${s.activeFrames}\t${s.artifactCue}" }.join("\n") + "\n").getBytes("UTF-8"))
 
 println("Extracting ROI traces and trace-level Kalman event scores")
 List<Map<String, Object>> roiJson = []
@@ -573,6 +741,32 @@ rois.each { roi ->
     double[] rawTrace = meanTrace(rawFrames, roiPixels)
     double[] bgTrace = meanTrace(rawFrames, bgPixels, frameMean)
     Map<String, Object> model = traceModel(rawTrace, bgTrace, neuropilWeight, kalmanGain, kalmanSpikeGain, kalmanNegativeGain, eventZThreshold)
+    int bboxW = ((roi.maxX as Number).intValue() - (roi.minX as Number).intValue() + 1)
+    int bboxH = ((roi.maxY as Number).intValue() - (roi.minY as Number).intValue() + 1)
+    double compactness = clamp01((roi.area as Number).doubleValue() / Math.max(1.0d, (bboxW * bboxH) as double))
+    double localCorrMean = meanFeature(roiPixels, localCorrelation)
+    double eventSupport = meanFeature(roiPixels, eventSupportMap)
+    double backgroundCorr = correlation(rawTrace, bgTrace)
+    double maxEvent = 0.0d
+    double[] eventTraceValues = model.eventTrace as double[]
+    for (int i = 0; i < eventTraceValues.length; i++) if (eventTraceValues[i] > maxEvent) maxEvent = eventTraceValues[i]
+    double traceSnr = maxEvent / Math.max(1.0e-6d, (model.noiseSigma as Number).doubleValue())
+    double artifactScore = clamp01(
+        Math.max(0.0d, backgroundCorr) * 0.35d +
+        (localCorrMean < 0.45d ? 0.25d : 0.0d) +
+        (compactness < 0.30d ? 0.20d : 0.0d) +
+        (((roi.area as Number).doubleValue() < minRoiArea * 1.5d) ? 0.10d : 0.0d)
+    )
+    double priorityScore = clamp01(
+        0.20d * localCorrMean +
+        0.20d * eventSupport +
+        0.20d * clamp01(traceSnr / 8.0d) +
+        0.15d * compactness +
+        0.15d * clamp01(((model.events as List).size() as double) / 8.0d) +
+        0.10d * clamp01((roi.peakScore as Number).doubleValue() / Math.max(1.0d, peakThreshold)) -
+        0.20d * Math.max(0.0d, backgroundCorr) -
+        0.15d * artifactScore
+    )
     List<List<Integer>> pointPairs = roiPixels.collect { idx ->
         int y = idx.intdiv(width)
         int x = idx - y * width
@@ -593,19 +787,80 @@ rois.each { roi ->
         eventTrace: rounded(model.eventTrace as double[], 5),
         zTrace: rounded(model.zTrace as double[], 3),
         noiseSigma: Math.round((model.noiseSigma as double) * 100000.0d) / 100000.0d,
+        localCorrelationMean: roundTo(localCorrMean, 3),
+        backgroundCorrelation: roundTo(backgroundCorr, 3),
+        traceSnr: roundTo(traceSnr, 3),
+        eventSupport: roundTo(eventSupport, 3),
+        compactness: roundTo(compactness, 3),
+        artifactScore: roundTo(artifactScore, 3),
+        priorityScore: roundTo(priorityScore, 3),
         events: (model.events as List<Map<String, Object>>).collect { e ->
             [frame: e.frame, z: Math.round((e.z as double) * 100.0d) / 100.0d, amplitude: Math.round((e.amplitude as double) * 100000.0d) / 100000.0d]
         }
     ])
 }
 
+double[] roiAreas = new double[roiJson.size()]
+double[] roiDiametersPx = new double[roiJson.size()]
+double[] roiNoise = new double[roiJson.size()]
+double[] roiEventCounts = new double[roiJson.size()]
+for (int i = 0; i < roiJson.size(); i++) {
+    Map<String, Object> roi = roiJson[i]
+    double area = (roi.area as Number).doubleValue()
+    roiAreas[i] = area
+    roiDiametersPx[i] = 2.0d * Math.sqrt(area / Math.PI)
+    roiNoise[i] = (roi.noiseSigma as Number).doubleValue()
+    roiEventCounts[i] = ((roi.events as List).size() as Number).doubleValue()
+}
+
 Map<String, Object> reviewData = [
     video: [
-        name: "calcium video 2.tif",
+        name: rawPath.fileName.toString(),
         width: width,
         height: height,
         frames: frames,
         framePattern: "frames/frame_%03d.png"
+    ],
+    qc: [
+        frameMeanTrace: rounded(frameMean, 2),
+        frameMaxTrace: rounded(frameMax, 2),
+        saturationStats: [
+            threshold: roundTo(saturationThreshold, 3),
+            maxFraction: roundTo(percentile(saturationFraction, 1.0d), 6),
+            medianFraction: roundTo(percentile(saturationFraction, 0.50d), 6)
+        ],
+        driftTrace: driftTrace,
+        driftStats: [
+            maxMagnitudePx: roundTo(percentile(driftMagnitude, 1.0d), 3),
+            medianMagnitudePx: roundTo(percentile(driftMagnitude, 0.50d), 3)
+        ],
+        frameMeanStats: [
+            min: Math.round(percentile(frameMean, 0.0d) * 100.0d) / 100.0d,
+            p05: Math.round(percentile(frameMean, 0.05d) * 100.0d) / 100.0d,
+            median: Math.round(percentile(frameMean, 0.50d) * 100.0d) / 100.0d,
+            p95: Math.round(percentile(frameMean, 0.95d) * 100.0d) / 100.0d,
+            max: Math.round(percentile(frameMean, 1.0d) * 100.0d) / 100.0d
+        ],
+        roiAreaStats: roiAreas.length ? [
+            min: Math.round(percentile(roiAreas, 0.0d) * 10.0d) / 10.0d,
+            median: Math.round(percentile(roiAreas, 0.50d) * 10.0d) / 10.0d,
+            max: Math.round(percentile(roiAreas, 1.0d) * 10.0d) / 10.0d
+        ] : [:],
+        roiDiameterPixelsStats: roiDiametersPx.length ? [
+            min: Math.round(percentile(roiDiametersPx, 0.0d) * 10.0d) / 10.0d,
+            median: Math.round(percentile(roiDiametersPx, 0.50d) * 10.0d) / 10.0d,
+            max: Math.round(percentile(roiDiametersPx, 1.0d) * 10.0d) / 10.0d
+        ] : [:],
+        noiseSigmaStats: roiNoise.length ? [
+            min: Math.round(percentile(roiNoise, 0.0d) * 100000.0d) / 100000.0d,
+            median: Math.round(percentile(roiNoise, 0.50d) * 100000.0d) / 100000.0d,
+            max: Math.round(percentile(roiNoise, 1.0d) * 100000.0d) / 100000.0d
+        ] : [:],
+        eventCountStats: roiEventCounts.length ? [
+            min: Math.round(percentile(roiEventCounts, 0.0d)),
+            median: Math.round(percentile(roiEventCounts, 0.50d)),
+            max: Math.round(percentile(roiEventCounts, 1.0d))
+        ] : [:]
     ],
     discovery: [
         evidenceMaps: [
@@ -616,11 +871,14 @@ Map<String, Object> reviewData = [
             [id: "robust_z_max", label: "Robust z max", file: "evidence/robust_z_max.png"],
             [id: "uncovered", label: "Uncovered robust-z score", file: "evidence/uncovered_robust_z_score.png"],
             [id: "local_contrast", label: "Local contrast proxy", file: "evidence/local_contrast_proxy.png"],
+            [id: "local_correlation", label: "Local temporal correlation", file: "evidence/local_correlation.png"],
+            [id: "event_triggered_support", label: "Event support", file: "evidence/event_triggered_support.png"],
             [id: "discovery_score", label: "Discovery score", file: "evidence/discovery_score.png"],
         ],
         suggestions: discoverySuggestions
     ],
     parameters: [
+        datasetId: datasetId,
         sourceZStack: zPath.toString(),
         minRoiArea: minRoiArea,
         maxRoiArea: maxRoiArea,
@@ -638,9 +896,10 @@ Map<String, Object> reviewData = [
 
 String dataJson = jsonValue(reviewData).toString()
 Files.write(outputDir.resolve("review_data.json"), dataJson.getBytes("UTF-8"))
-Files.write(outputDir.resolve("roi_summary.tsv"), ("roi_id\tcentroid_x\tcentroid_y\tarea\tpeak_score\tevent_count\tnoise_sigma\n" +
-    roiJson.collect { roi -> "${roi.id}\t${roi.centroidX}\t${roi.centroidY}\t${roi.area}\t${roi.peakScore}\t${(roi.events as List).size()}\t${roi.noiseSigma}" }.join("\n") + "\n").getBytes("UTF-8"))
+Files.write(outputDir.resolve("roi_summary.tsv"), ("roi_id\tcentroid_x\tcentroid_y\tarea\tpeak_score\tevent_count\tnoise_sigma\tpriority_score\tlocal_correlation_mean\tbackground_correlation\ttrace_snr\tevent_support\tartifact_score\n" +
+    roiJson.collect { roi -> "${roi.id}\t${roi.centroidX}\t${roi.centroidY}\t${roi.area}\t${roi.peakScore}\t${(roi.events as List).size()}\t${roi.noiseSigma}\t${roi.priorityScore}\t${roi.localCorrelationMean}\t${roi.backgroundCorrelation}\t${roi.traceSnr}\t${roi.eventSupport}\t${roi.artifactScore}" }.join("\n") + "\n").getBytes("UTF-8"))
 Files.write(outputDir.resolve("parameters.txt"), [
+    "dataset_id=${datasetId}",
     "raw_video=${rawPath}",
     "source_z_stack=${zPath}",
     "output_dir=${outputDir}",
@@ -659,7 +918,7 @@ String html = '''<!doctype html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>Neuron Review - calcium_video_2</title>
+<title>Neuron Review - __DATASET_ID__</title>
 <style>
 :root{color-scheme:light;--bg:#f7f8fb;--panel:#fff;--ink:#111827;--muted:#64748b;--line:#d9e0ea;--accent:#0ea5e9;--event:#facc15;--ok:#16a34a;--bad:#dc2626;--unsure:#9333ea}
 *{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--ink);font-family:Arial,Helvetica,sans-serif}.app{display:grid;grid-template-columns:minmax(620px,1fr) 430px;height:100vh;gap:0}.stage{padding:14px 16px 16px;min-width:0}.side{border-left:1px solid var(--line);background:var(--panel);padding:14px;overflow:auto}h1{font-size:18px;margin:0 0 8px}h2{font-size:15px;margin:16px 0 8px}.toolbar{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:10px}.toolbar button,.toolbar select{height:30px;border:1px solid var(--line);background:white;border-radius:6px;padding:0 10px}.toolbar label{font-size:13px;color:var(--muted)}input[type=range]{vertical-align:middle}.viewerWrap{position:relative;display:inline-block;background:#0b1220;border:1px solid #cbd5e1;max-width:100%}#frameImg{display:block;width:min(100%,900px);height:auto;image-rendering:auto}#overlay{position:absolute;left:0;top:0;width:100%;height:100%;cursor:crosshair}.status{font-size:13px;color:var(--muted);margin-top:8px}.metricGrid{display:grid;grid-template-columns:1fr 1fr;gap:8px}.metric{border:1px solid var(--line);border-radius:7px;padding:8px;background:#f8fafc}.metric b{display:block;font-size:17px}.metric span{font-size:12px;color:var(--muted)}.roiList{max-height:190px;overflow:auto;border:1px solid var(--line);border-radius:7px}.roiRow{display:grid;grid-template-columns:42px 1fr 52px;gap:6px;padding:6px 8px;border-bottom:1px solid #eef2f7;font-size:13px;cursor:pointer}.roiRow:hover,.roiRow.sel{background:#e0f2fe}.badge{font-size:11px;border-radius:5px;padding:1px 5px;background:#e2e8f0;color:#334155}.controls{display:flex;gap:8px;flex-wrap:wrap;margin:8px 0}.controls button{border:1px solid var(--line);background:white;border-radius:6px;padding:6px 9px}.controls button.active.accept{background:#dcfce7;border-color:#86efac}.controls button.active.reject{background:#fee2e2;border-color:#fca5a5}.controls button.active.unsure{background:#f3e8ff;border-color:#d8b4fe}#traceCanvas{width:100%;height:230px;border:1px solid var(--line);background:white;border-radius:7px}.hint{font-size:12px;color:var(--muted);line-height:1.35}.smallTable{width:100%;border-collapse:collapse;font-size:12px}.smallTable th,.smallTable td{border:1px solid var(--line);padding:5px;text-align:left}.smallTable th{background:#f1f5f9}.legend{display:flex;gap:10px;font-size:12px;color:var(--muted);flex-wrap:wrap}.dot{display:inline-block;width:10px;height:10px;border-radius:50%;margin-right:4px}
@@ -668,7 +927,7 @@ String html = '''<!doctype html>
 <body>
 <div class="app">
   <main class="stage">
-    <h1>Interactive Neuron Review: calcium_video_2</h1>
+    <h1>Interactive Neuron Review: __DATASET_ID__</h1>
     <div class="toolbar">
       <button id="playBtn">Play</button>
       <label>Frame <input id="frameSlider" type="range" min="1" max="260" value="1"></label>
@@ -733,7 +992,7 @@ const frameLabel = document.getElementById('frameLabel');
 const statusEl = document.getElementById('status');
 const traceCanvas = document.getElementById('traceCanvas');
 const traceCtx = traceCanvas.getContext('2d');
-const storeKey = 'neuron-review-calcium-video-2';
+const storeKey = 'neuron-review-__STORE_KEY__';
 let currentFrame = 1;
 let selectedId = data.rois.length ? data.rois[0].id : null;
 let playing = false;
@@ -936,7 +1195,11 @@ renderParams(); updateCounts(); renderRoiList(); setFrame(1); document.getElemen
 </html>
 '''
 
-html = html.replace("__DATA_JSON__", dataJson.replace("</script>", "<\\/script>"))
+String safeDatasetKey = datasetId.replaceAll("[^A-Za-z0-9_-]", "-")
+html = html
+    .replace("__DATASET_ID__", datasetId)
+    .replace("__STORE_KEY__", safeDatasetKey)
+    .replace("__DATA_JSON__", dataJson.replace("</script>", "<\\/script>"))
 Files.write(outputDir.resolve("index.html"), html.getBytes("UTF-8"))
 
 rawImp.close()

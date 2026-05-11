@@ -12,6 +12,16 @@ except ImportError:
 
 from utils import extract_pixel_detections
 
+
+def metric_value(point: Dict, key: str, default=None):
+    """Read a metric using canonical uppercase keys with legacy lowercase fallback."""
+    if key in point:
+        return point[key]
+    lower = key.lower()
+    if lower in point:
+        return point[lower]
+    return default
+
 def calculate_froc_point_metrics(
     gt_data: Dict, detections: Dict, video_shape: Tuple, distance_tolerance: float,
     return_fp_coords: bool = False, return_matches: bool = False
@@ -82,11 +92,14 @@ def calculate_truncated_auc(froc_points: List[Dict], truncation_limit: float) ->
     """Calculates the Area Under the FROC Curve up to a given FPPI limit."""
     if not froc_points or truncation_limit <= 0: return 0.0
     
-    points = sorted([p for p in froc_points if p.get('FPPI') is not None and p['FPPI'] <= truncation_limit], key=lambda p: p['FPPI'])
+    points = sorted(
+        [p for p in froc_points if metric_value(p, "FPPI") is not None and metric_value(p, "FPPI") <= truncation_limit],
+        key=lambda p: metric_value(p, "FPPI"),
+    )
     if not points: return 0.0
     
-    fppi = [p['FPPI'] for p in points]
-    tpr = [p['TPR'] for p in points]
+    fppi = [metric_value(p, "FPPI") for p in points]
+    tpr = [metric_value(p, "TPR", 0.0) for p in points]
     
     if not fppi or fppi[0] > 0:
         fppi.insert(0, 0.0)

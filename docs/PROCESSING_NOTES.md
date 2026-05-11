@@ -7,6 +7,10 @@ This repository now has two complementary workflows:
 - the Fiji/Groovy neuron-review workflow for practical inspection, ROI review,
   trace denoising, and event annotation
 
+For a concise peer-facing explanation of the current resting-video result,
+algorithm details, waveform colors, event markers, and hyperparameter status,
+see [RESTING_VIDEO_ALGORITHM_BRIEF.md](RESTING_VIDEO_ALGORITHM_BRIEF.md).
+
 ## Current Fiji/Groovy Workflow
 
 The current calcium-video workflow uses the following scripts in order:
@@ -32,8 +36,26 @@ The current calcium-video workflow uses the following scripts in order:
    - writes browser-ready review data
 6. `tools/build_neuron_workbench_v2.py`
    - builds the v2 annotation workbench from `review_data.json`
+   - accepts manifest-driven paths and attaches architecture-run metadata
+   - configures/exports browser assets and manifests, but does not execute
+     compute pipelines in-browser
 7. `tools/serve_neuron_workbench.py`
    - serves the workbench locally and autosaves annotations
+
+For routine processing, prefer the manifest runner instead of invoking each
+stage manually:
+
+```bash
+python3 tools/run_neuron_review_pipeline.py \
+  --dataset-manifest Outputs/Manifests/calcium_rest_cropped.dataset.json \
+  --fiji /home/jibby2k1/.local/bin/fiji
+```
+
+The scripts still default to `calcium_video_2`, but they now accept
+manifest-supplied dataset IDs and paths. A new sample writes to dataset-specific
+folders such as `Outputs/HighPass/<dataset_id>/`,
+`Outputs/CandidateEventPipeline/<dataset_id>/`, and
+`Outputs/NeuronReview/<dataset_id>/app/`.
 
 ## Denoising Policy
 
@@ -82,7 +104,62 @@ High-impact future robustness work:
 - stronger local-correlation evidence maps
 - uncertainty-ranked review queues
 - ROI split/merge and footprint brush editing
-- side-by-side comparison of trace denoisers and event models
+- side-by-side comparison of trace denoisers and event models through
+  Architecture Lab run manifests
+- Dataset QC summaries for ROI size, trace noise, event density, discovery
+  burden, and evidence-map inspection
+- selected-ROI crop and event-centered filmstrip review for local context
+
+## Manifest And Schema Layer
+
+The repository now includes a lightweight manifest layer:
+
+- `schemas/dataset_manifest.schema.json`
+- `schemas/architecture_run.schema.json`
+- `schemas/annotations.schema.json`
+- `schemas/review_data.schema.json`
+- `examples/dataset_manifest.example.json`
+- `examples/architecture_runs.example.json`
+
+Use `tools/create_dataset_manifest.py` to create a dataset manifest for a new
+video. The Python workbench builder and server no longer require absolute
+machine-local source paths by default.
+
+`tools/build_workbench_index.py` scans `Outputs/NeuronReview/*/app/` and writes
+`Outputs/NeuronReview/index.html`, making it possible to cycle through multiple
+processed videos from one local landing page.
+
+The browser autosave file migrates to annotation schema v3. Existing labels are
+preserved, while new fields capture trace quality, control readiness, artifact
+class, identity grouping, and event timing quality.
+
+The review-data generator now emits a `qc` block with frame-mean brightness
+statistics for future rebuilds. The dashboard also computes lightweight QC from
+existing ROI, event, noise, and evidence-map fields.
+
+Architecture Lab uses completed architecture-run manifests for comparison and
+planned pipeline manifests for Build mode. Planned manifests should capture
+dataset references, pipeline family, parameter presets, expected artifacts,
+status, and provenance, but they are not evidence that a run has completed.
+External tools still perform the computational work; the local browser only
+configures, reviews, compares, and exports the resulting metadata.
+
+## Review UI Planning
+
+The Review page is being organized around a stable video/trace workflow with
+collapsible supporting sections. The documentation contract for this layout is:
+
+- high-frequency ROI/event labeling controls remain easy to reach
+- lower-frequency panels such as advanced scoring, discovery, and audit details
+  can collapse without changing saved annotations
+- Selected ROI Context remains keyboard-reachable and text-labeled so the crop,
+  footprint, local metrics, and event filmstrip have an accessible summary
+- layout preferences and collapsed sections are UI state, not scientific labels
+
+Manual test planning for this slice should focus on navigation and data
+boundaries: collapsing sections should not change `annotations.json`, selected
+ROI context should remain reachable without a mouse, and Architecture Lab Build
+mode should export plans without implying browser-side pipeline execution.
 
 ## Missed-Neuron Discovery
 
@@ -108,3 +185,15 @@ The current discovery maps are intentionally lightweight:
 Suggestions are not treated as final truth. They are review targets with
 provenance and artifact cues. The user can promote likely missed neurons or mark
 regions as artifacts. Those labels should feed the next tuning pass.
+
+## Annotation Metric Helpers
+
+`neurobench.annotation_metrics.compute_annotation_summary()` preserves the
+existing ROI, event, suggestion, trace-quality, control-readiness, and review
+burden fields. It also emits triage helpers under `triage_categories` and
+`triage_queue_counts` for `strong_neuron`, `possible_missed_neuron`,
+`artifact_like`, `merged_cluster`, `weak_trace`, and `needs_event_review`.
+
+These categories are intentionally derived from current annotation and
+review-data fields only. They should be used to prioritize review queues and
+audit coverage, not as replacement labels in the annotation schema.

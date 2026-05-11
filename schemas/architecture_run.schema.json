@@ -1,0 +1,203 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Neurobench Architecture Run",
+  "oneOf": [
+    {"$ref": "#/$defs/run"},
+    {"$ref": "#/$defs/manifest"}
+  ],
+  "$defs": {
+    "manifest": {
+      "type": "object",
+      "required": ["schema_version", "dataset_id", "runs"],
+      "properties": {
+        "schema_version": {"type": "integer", "const": 1},
+        "dataset_id": {"type": "string", "minLength": 1},
+        "sweep": {"$ref": "#/$defs/manifest_sweep"},
+        "runs": {"type": "array", "items": {"$ref": "#/$defs/run"}}
+      },
+      "additionalProperties": true
+    },
+    "run": {
+      "type": "object",
+      "required": ["schema_version", "run_id", "dataset_id", "artifacts"],
+      "properties": {
+        "schema_version": {"type": "integer", "const": 1},
+        "run_id": {"type": "string", "minLength": 1},
+        "dataset_id": {"type": "string", "minLength": 1},
+        "label": {"type": "string"},
+        "created_at": {"type": "string"},
+        "pipeline": {"type": "array", "items": {"$ref": "#/$defs/pipeline_step"}},
+        "parameters": {"type": "object"},
+        "sweep": {"$ref": "#/$defs/run_sweep"},
+        "summary": {"type": "object"},
+        "execution": {
+          "type": "object",
+          "properties": {
+            "status": {"type": "string", "enum": ["planned", "running", "completed", "failed", "skipped"]},
+            "started_at": {"type": "string"},
+            "completed_at": {"type": "string"},
+            "message": {"type": "string"}
+          },
+          "additionalProperties": true
+        },
+        "artifacts": {"$ref": "#/$defs/artifacts"}
+      },
+      "additionalProperties": true
+    },
+    "pipeline_step": {
+      "type": "object",
+      "anyOf": [
+        {"$ref": "#/$defs/legacy_pipeline_step"},
+        {"$ref": "#/$defs/structured_pipeline_step"}
+      ]
+    },
+    "legacy_pipeline_step": {
+      "type": "object",
+      "required": ["name"],
+      "properties": {
+        "name": {"type": "string", "minLength": 1},
+        "params": {"type": "object"}
+      },
+      "additionalProperties": true
+    },
+    "structured_pipeline_step": {
+      "type": "object",
+      "required": ["id"],
+      "anyOf": [
+        {"required": ["stage_id"]},
+        {"required": ["stage"]}
+      ],
+      "properties": {
+        "id": {"type": "string", "minLength": 1},
+        "stage_id": {
+          "type": "string",
+          "enum": [
+            "source_video_import",
+            "review_data_import",
+            "temporal_highpass_gaussian",
+            "event_preserving_noise_suppression",
+            "spatial_gaussian",
+            "rigid_shift_estimate",
+            "suite2p_import",
+            "pmd_import",
+            "oasis_import",
+            "pmd_denoised_video_import",
+            "robust_positive_local_z",
+            "gamma_cfar",
+            "adaptive_ewma_z",
+            "adaptive_gamma_cfar",
+            "candidate_event_pipeline",
+            "component_filter",
+            "local_background_ring",
+            "trace_event_scoring",
+            "robust_kalman_positive_innovation",
+            "oasis_deconvolution_import",
+            "heuristic_priority_v1",
+            "generate_neuron_review_app"
+          ]
+        },
+        "stage": {
+          "type": "string",
+          "enum": [
+            "source_video_import",
+            "review_data_import",
+            "temporal_highpass_gaussian",
+            "event_preserving_noise_suppression",
+            "spatial_gaussian",
+            "rigid_shift_estimate",
+            "suite2p_import",
+            "pmd_import",
+            "oasis_import",
+            "pmd_denoised_video_import",
+            "robust_positive_local_z",
+            "gamma_cfar",
+            "adaptive_ewma_z",
+            "adaptive_gamma_cfar",
+            "candidate_event_pipeline",
+            "component_filter",
+            "local_background_ring",
+            "trace_event_scoring",
+            "robust_kalman_positive_innovation",
+            "oasis_deconvolution_import",
+            "heuristic_priority_v1",
+            "generate_neuron_review_app"
+          ]
+        },
+        "params": {"type": "object"},
+        "artifacts": {"type": "object"},
+        "metadata": {"type": "object"}
+      },
+      "additionalProperties": true
+    },
+    "manifest_sweep": {
+      "type": "object",
+      "required": ["parameters", "total_runs"],
+      "properties": {
+        "id": {"type": "string", "minLength": 1},
+        "label": {"type": "string", "minLength": 1},
+        "description": {"type": "string", "minLength": 1},
+        "parameters": {
+          "type": "array",
+          "minItems": 1,
+          "items": {"$ref": "#/$defs/sweep_factor"}
+        },
+        "total_runs": {"type": "integer", "minimum": 1}
+      },
+      "additionalProperties": true
+    },
+    "run_sweep": {
+      "type": "object",
+      "required": ["index", "total_runs", "parameters"],
+      "properties": {
+        "id": {"type": "string", "minLength": 1},
+        "label": {"type": "string", "minLength": 1},
+        "description": {"type": "string", "minLength": 1},
+        "index": {"type": "integer", "minimum": 0},
+        "total_runs": {"type": "integer", "minimum": 1},
+        "parameters": {
+          "type": "array",
+          "minItems": 1,
+          "items": {"$ref": "#/$defs/sweep_assignment"}
+        }
+      },
+      "additionalProperties": true
+    },
+    "sweep_factor": {
+      "type": "object",
+      "required": ["stage", "stage_id", "param", "values"],
+      "properties": {
+        "stage": {"type": "string", "minLength": 1},
+        "stage_id": {"type": "string", "minLength": 1},
+        "param": {"type": "string", "minLength": 1},
+        "values": {"type": "array", "minItems": 1, "items": {}}
+      },
+      "additionalProperties": true
+    },
+    "sweep_assignment": {
+      "type": "object",
+      "required": ["stage", "stage_id", "param", "value"],
+      "properties": {
+        "stage": {"type": "string", "minLength": 1},
+        "stage_id": {"type": "string", "minLength": 1},
+        "param": {"type": "string", "minLength": 1},
+        "value": {}
+      },
+      "additionalProperties": true
+    },
+    "artifacts": {
+      "type": "object",
+      "properties": {
+        "review_data": {"type": "string"},
+        "frames": {"type": "string"},
+        "denoised_video": {"type": "string"},
+        "source_video": {"type": "string"},
+        "oasis_traces": {"type": "string"},
+        "source_traces": {"type": "string"},
+        "evidence_maps": {"type": "array", "items": {"type": "object"}},
+        "roi_summary_tsv": {"type": "string"},
+        "discovery_suggestions_tsv": {"type": "string"}
+      },
+      "additionalProperties": true
+    }
+  }
+}

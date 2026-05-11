@@ -1,12 +1,27 @@
-// Create signed 32-bit temporal high-pass TIFF stacks for calcium video 2.
+// Create signed 32-bit temporal high-pass TIFF stacks for a calcium video.
 // Formula: high_pass = raw_32bit - GaussianBlur3D(raw_32bit, x=0, y=0, z=sigma_frames)
 
 requires("1.54p");
 
-inputPath = "/home/jibby2k1/CNEL/State Analysis (Fish)/Separable-Gamma-CFAR/Inputs/050126/050126/calcium video 2.tif";
-outputRoot = "/home/jibby2k1/CNEL/State Analysis (Fish)/Separable-Gamma-CFAR/Outputs";
+function argValue(args, key, defaultValue) {
+    parts = split(args, ",");
+    prefix = key + "=";
+    for (j = 0; j < parts.length; j++) {
+        item = trim(parts[j]);
+        if (startsWith(item, prefix)) {
+            return substring(item, lengthOf(prefix));
+        }
+    }
+    return defaultValue;
+}
+
+args = getArgument();
+projectRoot = "/home/jibby2k1/CNEL/State Analysis (Fish)/Separable-Gamma-CFAR";
+datasetId = argValue(args, "dataset_id", "calcium_video_2");
+inputPath = argValue(args, "input_path", projectRoot + "/Inputs/050126/050126/calcium video 2.tif");
+outputRoot = argValue(args, "output_root", projectRoot + "/Outputs");
 outputHighPass = outputRoot + "/HighPass";
-outputDir = outputHighPass + "/calcium_video_2";
+outputDir = outputHighPass + "/" + datasetId;
 sigmas = newArray(4, 6, 8);
 labels = newArray("04", "06", "08");
 
@@ -17,11 +32,12 @@ setBatchMode(true);
 
 open(inputPath);
 run("32-bit");
-rename("raw32_calcium_video_2");
+rename("raw32_" + datasetId);
 rawTitle = getTitle();
 getDimensions(width, height, channels, slices, frames);
 
 summary = "";
+summary += "dataset_id=" + datasetId + "\n";
 summary += "input_path=" + inputPath + "\n";
 summary += "output_dir=" + outputDir + "\n";
 summary += "formula=high_pass = raw_32bit - GaussianBlur3D(raw_32bit, x=0, y=0, z=sigma_frames)\n";
@@ -45,9 +61,9 @@ for (i = 0; i < sigmas.length; i++) {
 
     imageCalculator("Subtract create 32-bit stack", rawTitle, baselineTitle);
     resultTitle = getTitle();
-    rename("calcium_video_2_hp_gaussian_sigma" + label + "f_float32");
+    rename(datasetId + "_hp_gaussian_sigma" + label + "f_float32");
 
-    savePath = outputDir + "/calcium_video_2_hp_gaussian_sigma" + label + "f_float32.tif";
+    savePath = outputDir + "/" + datasetId + "_hp_gaussian_sigma" + label + "f_float32.tif";
     saveAs("Tiff", savePath);
     summary += "wrote=" + savePath + "\n";
 

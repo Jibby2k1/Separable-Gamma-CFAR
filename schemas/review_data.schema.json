@@ -1,0 +1,24 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Neurobench Review Data",
+  "type": "object",
+  "required": ["video", "parameters", "rois"],
+  "properties": {
+    "video": {
+      "type": "object",
+      "required": ["width", "height", "frames", "framePattern"],
+      "properties": {
+        "name": {"type": "string"},
+        "width": {"type": "integer"},
+        "height": {"type": "integer"},
+        "frames": {"type": "integer"},
+        "framePattern": {"type": "string"}
+      },
+      "additionalProperties": true
+    },
+    "parameters": {"type": "object"},
+    "rois": {"type": "array", "items": {"type": "object"}},
+    "discovery": {"type": "object"}
+  },
+  "additionalProperties": true
+}

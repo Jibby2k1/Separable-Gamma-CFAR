@@ -17,10 +17,27 @@ import java.nio.file.Files
 import java.nio.file.Path
 import java.nio.file.Paths
 import java.util.Arrays
+import java.util.Locale
 
-final Path projectRoot = Paths.get("/home/jibby2k1/CNEL/State Analysis (Fish)/Separable-Gamma-CFAR")
-final Path highPassDir = projectRoot.resolve("Outputs/HighPass/calcium_video_2")
-final Path outputDir = projectRoot.resolve("Outputs/EventPreservingNoiseSuppression/calcium_video_2")
+static String setting(String key, String fallback) {
+    String envKey = "NEUROBENCH_" + key.toUpperCase(Locale.ROOT).replaceAll("[^A-Z0-9]+", "_")
+    String envValue = System.getenv(envKey)
+    if (envValue != null && !envValue.isBlank()) return envValue
+    String propValue = System.getProperty("neurobench." + key)
+    if (propValue != null && !propValue.isBlank()) return propValue
+    return fallback
+}
+
+static Path resolvePath(Path projectRoot, String value) {
+    Path path = Paths.get(value)
+    return path.isAbsolute() ? path : projectRoot.resolve(path)
+}
+
+final Path projectRoot = Paths.get(setting("project_root", "/home/jibby2k1/CNEL/State Analysis (Fish)/Separable-Gamma-CFAR"))
+final String datasetId = setting("dataset_id", "calcium_video_2")
+final Path outputRoot = resolvePath(projectRoot, setting("output_root", "Outputs"))
+final Path highPassDir = outputRoot.resolve("HighPass").resolve(datasetId)
+final Path outputDir = outputRoot.resolve("EventPreservingNoiseSuppression").resolve(datasetId)
 final int localWindow = 23
 final int supportWindow = 3
 final int supportMinPixels = 2
@@ -29,9 +46,9 @@ final double noiseFloorFractionOfMadSigma = 0.25d
 final double[] thresholds = [2.0d, 2.5d, 3.0d, 3.5d, 4.0d] as double[]
 
 final List<Map<String, String>> variants = [
-    [label: "sigma04", file: "calcium_video_2_hp_gaussian_sigma04f_float32.tif"],
-    [label: "sigma06", file: "calcium_video_2_hp_gaussian_sigma06f_float32.tif"],
-    [label: "sigma08", file: "calcium_video_2_hp_gaussian_sigma08f_float32.tif"],
+    [label: "sigma04", file: "${datasetId}_hp_gaussian_sigma04f_float32.tif"],
+    [label: "sigma06", file: "${datasetId}_hp_gaussian_sigma06f_float32.tif"],
+    [label: "sigma08", file: "${datasetId}_hp_gaussian_sigma08f_float32.tif"],
 ]
 
 Files.createDirectories(outputDir)
@@ -164,6 +181,7 @@ static String thresholdLabel(double threshold) {
 }
 
 StringBuilder params = new StringBuilder()
+params << "dataset_id=${datasetId}\n"
 params << "input_dir=${highPassDir}\n"
 params << "output_dir=${outputDir}\n"
 params << "frame_correction=per-frame spatial median subtraction\n"
@@ -241,20 +259,20 @@ variants.each { variant ->
 
     imp.close()
 
-    ImagePlus correctedImp = new ImagePlus("calcium_video_2_${label}_median_corrected_float32", correctedStack)
-    Path correctedPath = outputDir.resolve("calcium_video_2_${label}_median_corrected_float32.tif")
+    ImagePlus correctedImp = new ImagePlus("${datasetId}_${label}_median_corrected_float32", correctedStack)
+    Path correctedPath = outputDir.resolve("${datasetId}_${label}_median_corrected_float32.tif")
     new FileSaver(correctedImp).saveAsTiffStack(correctedPath.toString())
     correctedImp.close()
 
-    ImagePlus zImp = new ImagePlus("calcium_video_2_${label}_positive_local_z_float32", zStack)
-    Path zPath = outputDir.resolve("calcium_video_2_${label}_positive_local_z_float32.tif")
+    ImagePlus zImp = new ImagePlus("${datasetId}_${label}_positive_local_z_float32", zStack)
+    Path zPath = outputDir.resolve("${datasetId}_${label}_positive_local_z_float32.tif")
     new FileSaver(zImp).saveAsTiffStack(zPath.toString())
     zImp.close()
 
     thresholds.each { t ->
-        ImagePlus maskImp = new ImagePlus("calcium_video_2_${label}_mask_z${t}", maskStacks[t])
+        ImagePlus maskImp = new ImagePlus("${datasetId}_${label}_mask_z${t}", maskStacks[t])
         String thresholdTag = thresholdLabel(t)
-        Path maskPath = outputDir.resolve("calcium_video_2_${label}_mask_z${thresholdTag}_support3x3_min2.tif")
+        Path maskPath = outputDir.resolve("${datasetId}_${label}_mask_z${thresholdTag}_support3x3_min2.tif")
         new FileSaver(maskImp).saveAsTiffStack(maskPath.toString())
         maskImp.close()
     }

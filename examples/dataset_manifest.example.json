@@ -1,0 +1,32 @@
+{
+  "schema_version": 1,
+  "dataset_id": "calcium_video_2",
+  "name": "calcium video 2.tif",
+  "modality": "light_sheet_calcium",
+  "indicator": "GCaMP6f",
+  "frame_rate_hz": 5.0,
+  "pixel_size_microns": 0.5,
+  "behavior": {
+    "tail_frame_rate_hz": null,
+    "sync_offset_frames": null,
+    "sync_notes": "Fill these fields before behavior-aligned inverse dynamics exports."
+  },
+  "online": {
+    "target_frame_rate_hz": 100.0,
+    "frame_budget_ms": 10.0,
+    "closed_loop_target": "tail_motion",
+    "notes": "Future 100 Hz samples should use seconds-based temporal parameters and benchmarked streaming stages."
+  },
+  "paths": {
+    "raw_video": "../Inputs/050126/050126/calcium video 2.tif",
+    "app_dir": "../Outputs/NeuronReview/calcium_video_2/app",
+    "review_data": "../Outputs/NeuronReview/calcium_video_2/app/review_data.json",
+    "annotations": "../Outputs/NeuronReview/calcium_video_2/app/annotations.json",
+    "architecture_runs": "../Outputs/ArchitectureRuns/calcium_video_2/architecture_runs.json",
+    "behavior_video": "",
+    "tail_motion": "",
+    "tail_points": "",
+    "stimulus_log": "",
+    "sync_table": ""
+  }
+}

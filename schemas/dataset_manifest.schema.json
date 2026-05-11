@@ -1,0 +1,52 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Neurobench Dataset Manifest",
+  "type": "object",
+  "required": ["schema_version", "dataset_id", "paths"],
+  "properties": {
+    "schema_version": {"type": "integer", "const": 1},
+    "dataset_id": {"type": "string", "minLength": 1},
+    "name": {"type": "string"},
+    "modality": {"type": "string"},
+    "indicator": {"type": "string"},
+    "frame_rate_hz": {"type": "number", "exclusiveMinimum": 0},
+    "pixel_size_microns": {"type": ["number", "null"], "exclusiveMinimum": 0},
+    "behavior": {
+      "type": "object",
+      "properties": {
+        "tail_frame_rate_hz": {"type": ["number", "null"], "exclusiveMinimum": 0},
+        "sync_offset_frames": {"type": ["number", "null"]},
+        "sync_notes": {"type": "string"}
+      },
+      "additionalProperties": true
+    },
+    "online": {
+      "type": "object",
+      "properties": {
+        "target_frame_rate_hz": {"type": ["number", "null"], "exclusiveMinimum": 0},
+        "frame_budget_ms": {"type": ["number", "null"], "exclusiveMinimum": 0},
+        "closed_loop_target": {"type": "string"},
+        "notes": {"type": "string"}
+      },
+      "additionalProperties": true
+    },
+    "paths": {
+      "type": "object",
+      "required": ["raw_video", "app_dir", "review_data"],
+      "properties": {
+        "raw_video": {"type": "string"},
+        "app_dir": {"type": "string"},
+        "review_data": {"type": "string"},
+        "annotations": {"type": "string"},
+        "architecture_runs": {"type": "string"},
+        "behavior_video": {"type": "string"},
+        "tail_motion": {"type": "string"},
+        "tail_points": {"type": "string"},
+        "stimulus_log": {"type": "string"},
+        "sync_table": {"type": "string"}
+      },
+      "additionalProperties": {"type": "string"}
+    }
+  },
+  "additionalProperties": true
+}

@@ -1,0 +1,72 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Neurobench Annotations",
+  "type": "object",
+  "required": ["schema_version", "rois", "events", "suggestions", "settings"],
+  "properties": {
+    "schema_version": {"type": "integer", "const": 3},
+    "updatedAt": {"type": ["string", "null"]},
+    "rois": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "properties": {
+          "state": {"type": "string"},
+          "cell_state": {"type": "string", "enum": ["", "accepted", "rejected", "unsure"]},
+          "trace_quality": {"type": "string", "enum": ["", "good", "weak", "noisy", "unusable"]},
+          "control_ready": {"type": "string", "enum": ["", "yes", "no", "maybe"]},
+          "artifact_class": {"type": "string"},
+          "identity_group": {"type": "string"},
+          "needs_action": {"type": "string"},
+          "deleted": {"type": "boolean"},
+          "notes": {"type": "string"}
+        },
+        "additionalProperties": true
+      }
+    },
+    "events": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "properties": {
+          "state": {"type": "string"},
+          "event_state": {"type": "string", "enum": ["", "accepted", "rejected", "unsure"]},
+          "event_type": {"type": "string"},
+          "timing_quality": {"type": "string", "enum": ["", "clear_frame", "ambiguous", "slow_transient"]}
+        },
+        "additionalProperties": true
+      }
+    },
+    "suggestions": {"type": "object"},
+    "promotedRois": {"type": "object"},
+    "virtualRois": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "properties": {
+          "id": {"type": "string"},
+          "roi_kind": {"type": "string"},
+          "source_roi_ids": {"type": "array", "items": {"type": ["integer", "string"]}},
+          "identity_group": {"type": "string"},
+          "cell_state": {"type": "string"},
+          "trace_quality": {"type": "string"},
+          "control_ready": {"type": "string"},
+          "artifact_class": {"type": "string"},
+          "notes": {"type": "string"}
+        },
+        "additionalProperties": true
+      }
+    },
+    "reviewStats": {
+      "type": "object",
+      "properties": {
+        "sessionStartedAt": {"type": ["string", "null"]},
+        "lastActionAt": {"type": ["string", "null"]},
+        "actions": {"type": "object", "additionalProperties": {"type": "integer"}}
+      },
+      "additionalProperties": true
+    },
+    "settings": {"type": "object"}
+  },
+  "additionalProperties": true
+}

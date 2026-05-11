@@ -17,10 +17,27 @@ import java.nio.file.Path
 import java.nio.file.Paths
 import java.util.Arrays
 import java.util.ArrayDeque
+import java.util.Locale
 
-final Path projectRoot = Paths.get("/home/jibby2k1/CNEL/State Analysis (Fish)/Separable-Gamma-CFAR")
-final Path highPassDir = projectRoot.resolve("Outputs/HighPass/calcium_video_2")
-final Path outputDir = projectRoot.resolve("Outputs/CandidateEventPipeline/calcium_video_2")
+static String setting(String key, String fallback) {
+    String envKey = "NEUROBENCH_" + key.toUpperCase(Locale.ROOT).replaceAll("[^A-Z0-9]+", "_")
+    String envValue = System.getenv(envKey)
+    if (envValue != null && !envValue.isBlank()) return envValue
+    String propValue = System.getProperty("neurobench." + key)
+    if (propValue != null && !propValue.isBlank()) return propValue
+    return fallback
+}
+
+static Path resolvePath(Path projectRoot, String value) {
+    Path path = Paths.get(value)
+    return path.isAbsolute() ? path : projectRoot.resolve(path)
+}
+
+final Path projectRoot = Paths.get(setting("project_root", "/home/jibby2k1/CNEL/State Analysis (Fish)/Separable-Gamma-CFAR"))
+final String datasetId = setting("dataset_id", "calcium_video_2")
+final Path outputRoot = resolvePath(projectRoot, setting("output_root", "Outputs"))
+final Path highPassDir = outputRoot.resolve("HighPass").resolve(datasetId)
+final Path outputDir = outputRoot.resolve("CandidateEventPipeline").resolve(datasetId)
 
 final double localRadius = 11.0d
 final double madScale = 1.4826d
@@ -30,9 +47,9 @@ final double minFillFraction = 0.10d
 final double maxAspectRatio = 6.0d
 
 final List<Map<String, String>> variants = [
-    [label: "sigma04", file: "calcium_video_2_hp_gaussian_sigma04f_float32.tif"],
-    [label: "sigma06", file: "calcium_video_2_hp_gaussian_sigma06f_float32.tif"],
-    [label: "sigma08", file: "calcium_video_2_hp_gaussian_sigma08f_float32.tif"],
+    [label: "sigma04", file: "${datasetId}_hp_gaussian_sigma04f_float32.tif"],
+    [label: "sigma06", file: "${datasetId}_hp_gaussian_sigma06f_float32.tif"],
+    [label: "sigma08", file: "${datasetId}_hp_gaussian_sigma08f_float32.tif"],
 ]
 
 final List<Map<String, Object>> presets = [
@@ -218,6 +235,7 @@ static Map<String, Object> componentFilter(
 }
 
 StringBuilder params = new StringBuilder()
+params << "dataset_id=${datasetId}\n"
 params << "input_dir=${highPassDir}\n"
 params << "output_dir=${outputDir}\n"
 params << "local_robust_z=(frame_median_corrected - local_median_radius_${localRadius}) / (1.4826 * local_median_abs_deviation + ${epsilon})\n"
@@ -338,18 +356,18 @@ variants.each { variant ->
     }
     imp.close()
 
-    ImagePlus zImp = new ImagePlus("calcium_video_2_${variantLabel}_robust_positive_z_float32", zStack)
-    new FileSaver(zImp).saveAsTiffStack(outputDir.resolve("calcium_video_2_${variantLabel}_robust_positive_z_float32.tif").toString())
+    ImagePlus zImp = new ImagePlus("${datasetId}_${variantLabel}_robust_positive_z_float32", zStack)
+    new FileSaver(zImp).saveAsTiffStack(outputDir.resolve("${datasetId}_${variantLabel}_robust_positive_z_float32.tif").toString())
     zImp.close()
 
     presets.each { preset ->
         String tag = presetTag(preset)
-        ImagePlus maskImp = new ImagePlus("calcium_video_2_${variantLabel}_${tag}_mask", maskStacks[tag])
-        new FileSaver(maskImp).saveAsTiffStack(outputDir.resolve("calcium_video_2_${variantLabel}_${tag}_mask.tif").toString())
+        ImagePlus maskImp = new ImagePlus("${datasetId}_${variantLabel}_${tag}_mask", maskStacks[tag])
+        new FileSaver(maskImp).saveAsTiffStack(outputDir.resolve("${datasetId}_${variantLabel}_${tag}_mask.tif").toString())
         maskImp.close()
 
-        ImagePlus labelImp = new ImagePlus("calcium_video_2_${variantLabel}_${tag}_labels", labelStacks[tag])
-        new FileSaver(labelImp).saveAsTiffStack(outputDir.resolve("calcium_video_2_${variantLabel}_${tag}_labels.tif").toString())
+        ImagePlus labelImp = new ImagePlus("${datasetId}_${variantLabel}_${tag}_labels", labelStacks[tag])
+        new FileSaver(labelImp).saveAsTiffStack(outputDir.resolve("${datasetId}_${variantLabel}_${tag}_labels.tif").toString())
         labelImp.close()
     }
 }

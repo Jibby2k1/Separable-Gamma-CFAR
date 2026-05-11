@@ -1,0 +1,56 @@
+{
+  "schema_version": 1,
+  "dataset_id": "calcium_video_2",
+  "run_id": "planned_candidate_review_v1",
+  "label": "Planned candidate review pipeline",
+  "pipeline": [
+    {
+      "id": "source",
+      "stage_id": "source_video_import",
+      "params": {
+        "source": "Inputs/050126/050126/calcium video 2.tif"
+      }
+    },
+    {
+      "id": "highpass",
+      "stage_id": "temporal_highpass_gaussian",
+      "params": {
+        "sigma_frames": 6.0
+      }
+    },
+    {
+      "id": "denoise",
+      "stage_id": "event_preserving_noise_suppression"
+    },
+    {
+      "id": "candidates",
+      "stage_id": "candidate_event_pipeline",
+      "params": {
+        "event_threshold_z": 2.4,
+        "min_area_px": 4
+      }
+    },
+    {
+      "id": "review_app",
+      "stage_id": "generate_neuron_review_app",
+      "metadata": {
+        "owner": "neurobench"
+      }
+    }
+  ],
+  "sweep": {
+    "id": "candidate_threshold_sweep",
+    "label": "Candidate threshold sweep",
+    "parameters": [
+      {
+        "stage": "candidates",
+        "param": "event_threshold_z",
+        "values": [2.0, 2.4, 2.8]
+      }
+    ]
+  },
+  "artifacts": {
+    "source_video": "Inputs/050126/050126/calcium video 2.tif",
+    "review_data": "Outputs/NeuronReview/calcium_video_2/app/review_data.json"
+  }
+}

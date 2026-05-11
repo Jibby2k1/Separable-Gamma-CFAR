@@ -1,0 +1,22 @@
+{
+  "schema_version": 1,
+  "dataset_id": "calcium_video_2",
+  "runs": [
+    {
+      "schema_version": 1,
+      "run_id": "current_fiji_groovy_review",
+      "dataset_id": "calcium_video_2",
+      "label": "Current Fiji/Groovy review pipeline",
+      "pipeline": [
+        {"name": "candidate_event_pipeline"},
+        {"name": "generate_neuron_review_app"},
+        {"name": "trace_event_scoring", "params": {"event_threshold_z": 2.4}}
+      ],
+      "summary": {"roi_count": 38},
+      "artifacts": {
+        "review_data": "../Outputs/NeuronReview/calcium_video_2/app/review_data.json",
+        "roi_summary_tsv": "../Outputs/NeuronReview/calcium_video_2/app/roi_summary.tsv"
+      }
+    }
+  ]
+}

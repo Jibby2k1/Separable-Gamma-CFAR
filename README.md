@@ -220,24 +220,38 @@ What happens:
 
 The workbench path is intended for interactive scientific review of candidate
 neurons and firing events. It depends on Fiji/ImageJ for TIFF stack handling and
-uses stdlib Python for the local browser UI/autosave server.
+uses stdlib Python for the local browser UI/autosave server. New samples should
+be run through a dataset manifest so processed videos can be opened from one
+index page.
 
-1. Run the Fiji/Groovy review-data generator:
+For a concise lab-shareable explanation of the current resting-video algorithm,
+waveforms, event markers, and untuned baseline status, see
+[docs/RESTING_VIDEO_ALGORITHM_BRIEF.md](docs/RESTING_VIDEO_ALGORITHM_BRIEF.md).
+
+1. Create a manifest for the TIFF:
 
 ```bash
-fiji --headless --run '/home/jibby2k1/CNEL/State Analysis (Fish)/Separable-Gamma-CFAR/tools/generate_neuron_review_app.groovy'
+python3 tools/create_dataset_manifest.py \
+  --out Outputs/Manifests/calcium_rest_cropped.dataset.json \
+  --dataset-id calcium_rest_cropped \
+  --raw-video "Inputs/050126/050126/calcium_rest_cropped.tif" \
+  --app-dir Outputs/NeuronReview/calcium_rest_cropped/app \
+  --frame-rate-hz 5.0 \
+  --pixel-size-microns 0.5
 ```
 
-2. Build the v2 workbench UI:
+2. Run the current Fiji/Groovy pipeline and build the dashboard:
 
 ```bash
-python3 tools/build_neuron_workbench_v2.py
+python3 tools/run_neuron_review_pipeline.py \
+  --dataset-manifest Outputs/Manifests/calcium_rest_cropped.dataset.json \
+  --fiji /home/jibby2k1/.local/bin/fiji
 ```
 
-3. Start the local autosave server:
+3. Start the multi-dataset autosave server:
 
 ```bash
-python3 tools/serve_neuron_workbench.py --port 8765
+python3 tools/serve_neuron_workbench.py --root-dir Outputs/NeuronReview --port 8765
 ```
 
 4. Open:

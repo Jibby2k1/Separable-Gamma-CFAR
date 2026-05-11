@@ -11,7 +11,7 @@ import torch
 from core.pipelines import run_single_stage, run_two_stage  # NEW
 from core.filters import get_feature_map
 from core.detection import CFAR, apply_neighborhood_filter
-from evaluation.metrics import calculate_froc_point_metrics
+from evaluation.metrics import calculate_froc_point_metrics, metric_value
 from evaluation import metrics
 from utils import extract_pixel_detections
 
@@ -23,9 +23,9 @@ def process_full_task_for_worker(task_tuple: Tuple) -> Dict:
     Returns (schema unchanged, with one new field):
       {
         "params": params,
-        "roc_points": [ { "z_score": float, "tpr": float, "fppi": float, ...}, ... ],
+        "roc_points": [ { "z_score": float, "TPR": float, "FPPI": float, ...}, ... ],
         "restrictive_point":  # NEW: dict or None
-            { "z_score": float, "tpr": float, "fppi": float,
+            { "z_score": float, "TPR": float, "FPPI": float,
               "matched_unique_ids": [ids...], "unique_id_coverage": float }
       }
     """
@@ -113,9 +113,16 @@ def process_full_task_for_worker(task_tuple: Tuple) -> Dict:
             # append standard ROC point (unchanged fields you already use downstream)
             pt = {
                 "z_score": float(z),
-                "tpr": float(m.get("tpr", 0.0)),
-                "fppi": float(m.get("fppi", 0.0)),
+                "TPR": float(metric_value(m, "TPR", 0.0)),
+                "FPPI": float(metric_value(m, "FPPI", 0.0)),
+                "TP": int(metric_value(m, "TP", 0)),
+                "FP": int(metric_value(m, "FP", 0)),
+                "FN": int(metric_value(m, "FN", 0)),
             }
+            # Legacy lowercase copies keep older plotting/reporting code readable
+            # while canonical uppercase metrics propagate through new outputs.
+            pt["tpr"] = pt["TPR"]
+            pt["fppi"] = pt["FPPI"]
             result["roc_points"].append(pt)
 
             # record the first (max-z) full unique-ID coverage point

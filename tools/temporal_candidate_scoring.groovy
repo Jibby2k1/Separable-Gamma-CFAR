@@ -13,12 +13,29 @@ import ij.process.ByteProcessor
 import java.nio.file.Files
 import java.nio.file.Path
 import java.nio.file.Paths
+import java.util.Locale
 
-final Path projectRoot = Paths.get("/home/jibby2k1/CNEL/State Analysis (Fish)/Separable-Gamma-CFAR")
-final Path rawPath = projectRoot.resolve("Inputs/050126/050126/calcium video 2.tif")
-final Path highPassDir = projectRoot.resolve("Outputs/HighPass/calcium_video_2")
-final Path candidateDir = projectRoot.resolve("Outputs/CandidateEventPipeline/calcium_video_2")
-final Path outputDir = projectRoot.resolve("Outputs/TemporalCandidateScoring/calcium_video_2")
+static String setting(String key, String fallback) {
+    String envKey = "NEUROBENCH_" + key.toUpperCase(Locale.ROOT).replaceAll("[^A-Z0-9]+", "_")
+    String envValue = System.getenv(envKey)
+    if (envValue != null && !envValue.isBlank()) return envValue
+    String propValue = System.getProperty("neurobench." + key)
+    if (propValue != null && !propValue.isBlank()) return propValue
+    return fallback
+}
+
+static Path resolvePath(Path projectRoot, String value) {
+    Path path = Paths.get(value)
+    return path.isAbsolute() ? path : projectRoot.resolve(path)
+}
+
+final Path projectRoot = Paths.get(setting("project_root", "/home/jibby2k1/CNEL/State Analysis (Fish)/Separable-Gamma-CFAR"))
+final String datasetId = setting("dataset_id", "calcium_video_2")
+final Path rawPath = resolvePath(projectRoot, setting("raw_video", "Inputs/050126/050126/calcium video 2.tif"))
+final Path outputRoot = resolvePath(projectRoot, setting("output_root", "Outputs"))
+final Path highPassDir = outputRoot.resolve("HighPass").resolve(datasetId)
+final Path candidateDir = outputRoot.resolve("CandidateEventPipeline").resolve(datasetId)
+final Path outputDir = outputRoot.resolve("TemporalCandidateScoring").resolve(datasetId)
 
 final int preFrames = 4
 final int rawPostFrames = 8
@@ -27,9 +44,9 @@ final int roiExpansion = 1
 final double[] scoreCutoffs = [0.25d, 0.50d, 0.75d] as double[]
 
 final List<Map<String, String>> variants = [
-    [label: "sigma04", hpFile: "calcium_video_2_hp_gaussian_sigma04f_float32.tif"],
-    [label: "sigma06", hpFile: "calcium_video_2_hp_gaussian_sigma06f_float32.tif"],
-    [label: "sigma08", hpFile: "calcium_video_2_hp_gaussian_sigma08f_float32.tif"],
+    [label: "sigma04", hpFile: "${datasetId}_hp_gaussian_sigma04f_float32.tif"],
+    [label: "sigma06", hpFile: "${datasetId}_hp_gaussian_sigma06f_float32.tif"],
+    [label: "sigma08", hpFile: "${datasetId}_hp_gaussian_sigma08f_float32.tif"],
 ]
 
 final List<Map<String, String>> presets = [
@@ -159,6 +176,7 @@ double[][] rawIntegrals = integralStack(rawImp)
 rawImp.close()
 
 StringBuilder params = new StringBuilder()
+params << "dataset_id=${datasetId}\n"
 params << "raw_video=${rawPath}\n"
 params << "high_pass_dir=${highPassDir}\n"
 params << "candidate_dir=${candidateDir}\n"
@@ -192,7 +210,7 @@ Files.newBufferedWriter(temporalEvents).withCloseable { eventWriter ->
             presets.each { preset ->
                 String presetName = preset.name
                 String presetTag = preset.tag
-                Path labelsPath = candidateDir.resolve("calcium_video_2_${variantLabel}_${presetTag}_labels.tif")
+                Path labelsPath = candidateDir.resolve("${datasetId}_${variantLabel}_${presetTag}_labels.tif")
                 println("Scoring ${variantLabel}/${presetName}: ${labelsPath}")
                 ImagePlus labelsImp = IJ.openImage(labelsPath.toString())
                 if (labelsImp == null) throw new IllegalStateException("Could not open label stack: ${labelsPath}")
@@ -310,8 +328,8 @@ Files.newBufferedWriter(temporalEvents).withCloseable { eventWriter ->
 
                 scoreCutoffs.each { cutoff ->
                     String tag = scoreTag(cutoff)
-                    ImagePlus out = new ImagePlus("calcium_video_2_${variantLabel}_${presetTag}_score_ge_${tag}_mask", cutoffStacks[cutoff])
-                    Path maskPath = outputDir.resolve("calcium_video_2_${variantLabel}_${presetTag}_score_ge_${tag}_mask.tif")
+                    ImagePlus out = new ImagePlus("${datasetId}_${variantLabel}_${presetTag}_score_ge_${tag}_mask", cutoffStacks[cutoff])
+                    Path maskPath = outputDir.resolve("${datasetId}_${variantLabel}_${presetTag}_score_ge_${tag}_mask.tif")
                     new FileSaver(out).saveAsTiffStack(maskPath.toString())
                     out.close()
                     summaryWriter.write([
