@@ -25,6 +25,8 @@ The current calcium-video workflow uses the following scripts in order:
      nearby-frame support, and collapse penalties
 5. `tools/generate_neuron_review_app.groovy`
    - turns aggregate evidence into stable ROI candidates
+   - writes evidence maps for missed-neuron discovery
+   - ranks uncovered candidate suggestions by combined evidence
    - extracts raw and local-background-corrected traces
    - applies trace-level robust Kalman baseline estimation
    - writes browser-ready review data
@@ -77,7 +79,32 @@ The intended loop is:
 High-impact future robustness work:
 
 - motion/drift correction before ROI extraction
-- correlation-image and variance-image evidence maps
+- stronger local-correlation evidence maps
 - uncertainty-ranked review queues
 - ROI split/merge and footprint brush editing
 - side-by-side comparison of trace denoisers and event models
+
+## Missed-Neuron Discovery
+
+The workbench now separates ROI review from coverage auditing. Coverage auditing
+uses evidence maps and “uncovered” suggestions to show signal that is not
+explained by the current ROI set.
+
+The generator writes browser-ready evidence maps under:
+
+```bash
+Outputs/NeuronReview/calcium_video_2/app/evidence/
+```
+
+The current discovery maps are intentionally lightweight:
+
+- raw mean, max, and temporal standard deviation projections
+- robust-z max projection
+- z-threshold peak-count projection
+- uncovered robust-z score after masking near existing ROIs
+- local contrast proxy
+- combined discovery score
+
+Suggestions are not treated as final truth. They are review targets with
+provenance and artifact cues. The user can promote likely missed neurons or mark
+regions as artifacts. Those labels should feed the next tuning pass.

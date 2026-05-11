@@ -25,6 +25,7 @@ final Path rawPath = projectRoot.resolve("Inputs/050126/050126/calcium video 2.t
 final Path zPath = projectRoot.resolve("Outputs/CandidateEventPipeline/calcium_video_2/calcium_video_2_sigma06_robust_positive_z_float32.tif")
 final Path outputDir = projectRoot.resolve("Outputs/NeuronReview/calcium_video_2/app")
 final Path frameDir = outputDir.resolve("frames")
+final Path evidenceDir = outputDir.resolve("evidence")
 
 final int minRoiArea = 8
 final int maxRoiArea = 260
@@ -41,6 +42,7 @@ final double kalmanSpikeGain = 0.008d
 final double kalmanNegativeGain = 0.110d
 
 Files.createDirectories(frameDir)
+Files.createDirectories(evidenceDir)
 
 static float[] pixelsAsFloat(ImagePlus imp, int frame) {
     return (float[]) imp.getStack().getProcessor(frame).convertToFloatProcessor().getPixels()
@@ -288,6 +290,29 @@ static void writePng(float[] pixels, int width, int height, Path path) {
     ImageIO.write(img, "png", path.toFile())
 }
 
+static float[] normalize01(float[] values) {
+    double lo = percentile(values, 0.01d)
+    double hi = percentile(values, 0.995d)
+    double range = Math.max(1.0e-6d, hi - lo)
+    float[] out = new float[values.length]
+    for (int i = 0; i < values.length; i++) {
+        double v = ((values[i] as double) - lo) / range
+        if (v < 0.0d) v = 0.0d
+        if (v > 1.0d) v = 1.0d
+        out[i] = (float) v
+    }
+    return out
+}
+
+static boolean nearExistingCentroid(List<Map<String, Object>> rois, int x, int y, double minDistance) {
+    double minD2 = minDistance * minDistance
+    return rois.any { roi ->
+        double dx = (roi.centroidX as double) - x
+        double dy = (roi.centroidY as double) - y
+        return dx * dx + dy * dy < minD2
+    }
+}
+
 println("Loading raw video: ${rawPath}")
 ImagePlus rawImp = IJ.openImage(rawPath.toString())
 if (rawImp == null) throw new IllegalStateException("Could not open raw video: ${rawPath}")
@@ -302,13 +327,31 @@ final int pixelsPerFrame = width * height
 println("Reading ${frames} raw frames into memory")
 float[][] rawFrames = new float[frames][]
 double[] frameMean = new double[frames]
+double[] rawSum = new double[pixelsPerFrame]
+double[] rawSumSq = new double[pixelsPerFrame]
+float[] rawMax = new float[pixelsPerFrame]
 for (int f = 1; f <= frames; f++) {
     float[] pix = pixelsAsFloat(rawImp, f)
     rawFrames[f - 1] = pix
     double sum = 0.0d
-    for (int i = 0; i < pix.length; i++) sum += pix[i] as double
+    for (int i = 0; i < pix.length; i++) {
+        double value = pix[i] as double
+        sum += value
+        rawSum[i] += value
+        rawSumSq[i] += value * value
+        if (f == 1 || value > (rawMax[i] as double)) rawMax[i] = (float) value
+    }
     frameMean[f - 1] = sum / pix.length
     writePng(pix, width, height, frameDir.resolve(String.format("frame_%03d.png", f)))
+}
+
+float[] rawMean = new float[pixelsPerFrame]
+float[] rawStd = new float[pixelsPerFrame]
+for (int i = 0; i < pixelsPerFrame; i++) {
+    double mean = rawSum[i] / frames
+    double var = Math.max(0.0d, rawSumSq[i] / frames - mean * mean)
+    rawMean[i] = (float) mean
+    rawStd[i] = (float) Math.sqrt(var)
 }
 
 println("Building aggregate robust-z projection from ${zPath.fileName}")
@@ -397,6 +440,131 @@ println("Detected ${rois.size()} stable candidate ROIs")
 boolean[] anyRoi = new boolean[pixelsPerFrame]
 rois.each { roi -> (roi.pixels as List<Integer>).each { anyRoi[it] = true } }
 
+println("Writing evidence maps and missed-neuron discovery suggestions")
+float[] activeCountFloat = new float[pixelsPerFrame]
+float[] uncoveredScore = new float[pixelsPerFrame]
+boolean[] blockedByRoi = new boolean[pixelsPerFrame]
+rois.each { roi ->
+    (roi.pixels as List<Integer>).each { idx ->
+        int y = idx.intdiv(width)
+        int x = idx - y * width
+        for (int yy = Math.max(0, y - minPeakDistance); yy <= Math.min(height - 1, y + minPeakDistance); yy++) {
+            int row = yy * width
+            for (int xx = Math.max(0, x - minPeakDistance); xx <= Math.min(width - 1, x + minPeakDistance); xx++) {
+                int dx = xx - x
+                int dy = yy - y
+                if (dx * dx + dy * dy <= minPeakDistance * minPeakDistance) {
+                    blockedByRoi[row + xx] = true
+                }
+            }
+        }
+    }
+}
+for (int i = 0; i < pixelsPerFrame; i++) {
+    activeCountFloat[i] = (float) activeCount[i]
+    uncoveredScore[i] = blockedByRoi[i] ? 0.0f : score[i]
+}
+float[] localContrast = boxSmooth3x3(rawStd, width, height)
+float[] nMaxZ = normalize01(maxZ)
+float[] nStd = normalize01(rawStd)
+float[] nActive = normalize01(activeCountFloat)
+float[] nUncovered = normalize01(uncoveredScore)
+float[] discoveryScore = new float[pixelsPerFrame]
+for (int i = 0; i < pixelsPerFrame; i++) {
+    discoveryScore[i] = blockedByRoi[i] ? 0.0f : (float) (
+        0.40d * (nMaxZ[i] as double) +
+        0.25d * (nStd[i] as double) +
+        0.20d * (nActive[i] as double) +
+        0.15d * (nUncovered[i] as double)
+    )
+}
+discoveryScore = boxSmooth3x3(discoveryScore, width, height)
+
+writePng(rawMean, width, height, evidenceDir.resolve("mean_projection.png"))
+writePng(rawMax, width, height, evidenceDir.resolve("max_projection.png"))
+writePng(rawStd, width, height, evidenceDir.resolve("std_projection.png"))
+writePng(activeCountFloat, width, height, evidenceDir.resolve("peak_count_z_ge_2.png"))
+writePng(maxZ, width, height, evidenceDir.resolve("robust_z_max.png"))
+writePng(uncoveredScore, width, height, evidenceDir.resolve("uncovered_robust_z_score.png"))
+writePng(localContrast, width, height, evidenceDir.resolve("local_contrast_proxy.png"))
+writePng(discoveryScore, width, height, evidenceDir.resolve("discovery_score.png"))
+
+List<Map<String, Object>> discoverySuggestions = []
+List<Integer> suggestionPeaks = []
+double suggestionThreshold = percentile(discoveryScore, 0.985d)
+for (int y = nonMaxRadius; y < height - nonMaxRadius; y++) {
+    for (int x = nonMaxRadius; x < width - nonMaxRadius; x++) {
+        int idx = y * width + x
+        if ((discoveryScore[idx] as double) >= suggestionThreshold &&
+            !blockedByRoi[idx] &&
+            isLocalMax(discoveryScore, width, height, x, y, nonMaxRadius) &&
+            !nearExistingCentroid(rois, x, y, minPeakDistance * 1.5d)) {
+            suggestionPeaks.add(idx)
+        }
+    }
+}
+suggestionPeaks.sort { a, b -> (discoveryScore[b] as double) <=> (discoveryScore[a] as double) }
+boolean[] suggestionAssigned = blockedByRoi.clone()
+suggestionPeaks.each { seedIdx ->
+    if (discoverySuggestions.size() >= 80) return
+    int sy = seedIdx.intdiv(width)
+    int sx = seedIdx - sy * width
+    boolean tooCloseSuggestion = discoverySuggestions.any { s ->
+        double dx = (s.centroidX as double) - sx
+        double dy = (s.centroidY as double) - sy
+        return dx * dx + dy * dy < minPeakDistance * minPeakDistance
+    }
+    if (tooCloseSuggestion) return
+    double seedScore = discoveryScore[seedIdx] as double
+    List<Integer> region = growFootprint(discoveryScore, suggestionAssigned, width, height, seedIdx, Math.max(0.18d, 0.38d * seedScore), footprintRadius)
+    if (region.size() < minRoiArea || region.size() > maxRoiArea) return
+    double sumX = 0.0d
+    double sumY = 0.0d
+    int minX = width
+    int minY = height
+    int maxX = -1
+    int maxY = -1
+    double maxRaw = 0.0d
+    region.each { idx ->
+        suggestionAssigned[idx] = true
+        int y = idx.intdiv(width)
+        int x = idx - y * width
+        sumX += x
+        sumY += y
+        if (x < minX) minX = x
+        if (x > maxX) maxX = x
+        if (y < minY) minY = y
+        if (y > maxY) maxY = y
+        if ((rawMax[idx] as double) > maxRaw) maxRaw = rawMax[idx] as double
+    }
+    int bboxW = maxX - minX + 1
+    int bboxH = maxY - minY + 1
+    double aspect = Math.max(bboxW, bboxH) / Math.max(1.0d, Math.min(bboxW, bboxH) as double)
+    String artifactCue = "none"
+    if (minX <= 1 || minY <= 1 || maxX >= width - 2 || maxY >= height - 2) artifactCue = "border"
+    else if (aspect > 4.0d) artifactCue = "elongated_structure"
+    else if (maxRaw >= percentile(rawMax, 0.998d)) artifactCue = "very_bright"
+    discoverySuggestions.add([
+        id: "S" + (discoverySuggestions.size() + 1),
+        provenance: "uncovered_combined",
+        centroidX: Math.round((sumX / region.size()) * 10.0d) / 10.0d,
+        centroidY: Math.round((sumY / region.size()) * 10.0d) / 10.0d,
+        area: region.size(),
+        discoveryScore: Math.round(seedScore * 1000.0d) / 1000.0d,
+        maxZ: Math.round((maxZ[seedIdx] as double) * 100.0d) / 100.0d,
+        activeFrames: activeCount[seedIdx],
+        bbox: [minX, minY, maxX, maxY],
+        artifactCue: artifactCue,
+        points: region.collect { idx ->
+            int y = idx.intdiv(width)
+            int x = idx - y * width
+            [x, y]
+        }
+    ])
+}
+Files.write(outputDir.resolve("discovery_suggestions.tsv"), ("suggestion_id\tcentroid_x\tcentroid_y\tarea\tdiscovery_score\tmax_z\tactive_frames\tartifact_cue\n" +
+    discoverySuggestions.collect { s -> "${s.id}\t${s.centroidX}\t${s.centroidY}\t${s.area}\t${s.discoveryScore}\t${s.maxZ}\t${s.activeFrames}\t${s.artifactCue}" }.join("\n") + "\n").getBytes("UTF-8"))
+
 println("Extracting ROI traces and trace-level Kalman event scores")
 List<Map<String, Object>> roiJson = []
 rois.each { roi ->
@@ -439,6 +607,19 @@ Map<String, Object> reviewData = [
         frames: frames,
         framePattern: "frames/frame_%03d.png"
     ],
+    discovery: [
+        evidenceMaps: [
+            [id: "raw_mean", label: "Raw mean", file: "evidence/mean_projection.png"],
+            [id: "raw_max", label: "Raw max", file: "evidence/max_projection.png"],
+            [id: "raw_std", label: "Raw std", file: "evidence/std_projection.png"],
+            [id: "peak_count", label: "Peak count z>=2", file: "evidence/peak_count_z_ge_2.png"],
+            [id: "robust_z_max", label: "Robust z max", file: "evidence/robust_z_max.png"],
+            [id: "uncovered", label: "Uncovered robust-z score", file: "evidence/uncovered_robust_z_score.png"],
+            [id: "local_contrast", label: "Local contrast proxy", file: "evidence/local_contrast_proxy.png"],
+            [id: "discovery_score", label: "Discovery score", file: "evidence/discovery_score.png"],
+        ],
+        suggestions: discoverySuggestions
+    ],
     parameters: [
         sourceZStack: zPath.toString(),
         minRoiArea: minRoiArea,
@@ -464,6 +645,7 @@ Files.write(outputDir.resolve("parameters.txt"), [
     "source_z_stack=${zPath}",
     "output_dir=${outputDir}",
     "roi_count=${roiJson.size()}",
+    "discovery_suggestion_count=${discoverySuggestions.size()}",
     "frame_count=${frames}",
     "event_z_threshold=${eventZThreshold}",
     "denoising=trace_level_robust_kalman_baseline",

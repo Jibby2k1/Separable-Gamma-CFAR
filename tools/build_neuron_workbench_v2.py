@@ -159,6 +159,16 @@ input[type="range"] {
   height: 100%;
   cursor: crosshair;
 }
+#evidenceImg {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: fill;
+  opacity: 0;
+  pointer-events: none;
+  mix-blend-mode: screen;
+}
 .status {
   display: flex;
   justify-content: space-between;
@@ -251,14 +261,19 @@ input[type="range"] {
 .badge.accept { background: #dcfce7; color: #166534; }
 .badge.reject { background: #fee2e2; color: #991b1b; }
 .badge.unsure { background: #f3e8ff; color: #6b21a8; }
-.eventList {
+.eventList,
+.suggestionList {
   max-height: 180px;
   overflow: auto;
   border: 1px solid var(--line);
   border-radius: 8px;
   background: #ffffff;
 }
-.eventRow {
+.suggestionList {
+  max-height: 210px;
+}
+.eventRow,
+.suggestionRow {
   display: grid;
   grid-template-columns: 58px 1fr 70px;
   padding: 6px 8px;
@@ -267,7 +282,9 @@ input[type="range"] {
   cursor: pointer;
 }
 .eventRow:hover,
-.eventRow.sel {
+.eventRow.sel,
+.suggestionRow:hover,
+.suggestionRow.sel {
   background: #fef9c3;
 }
 textarea {
@@ -317,6 +334,7 @@ JS = r"""
 const embedded = document.getElementById('review-data');
 const data = JSON.parse(embedded.textContent);
 const img = document.getElementById('frameImg');
+const evidenceImg = document.getElementById('evidenceImg');
 const overlay = document.getElementById('overlay');
 const ctx = overlay.getContext('2d');
 const slider = document.getElementById('frameSlider');
@@ -335,6 +353,7 @@ const storeKey = 'neuron-review-workbench-v2-calcium-video-2';
 let currentFrame = 1;
 let selectedId = data.rois.length ? data.rois[0].id : null;
 let selectedEventFrame = null;
+let selectedSuggestionId = data.discovery?.suggestions?.[0]?.id || null;
 let playing = false;
 let timer = null;
 let saveTimer = null;
@@ -347,6 +366,8 @@ function defaultAnnotations() {
     updatedAt: new Date().toISOString(),
     rois: {},
     events: {},
+    suggestions: {},
+    promotedRois: {},
     settings: {
       eventThreshold: 2.4,
       kalmanGain: 0.06,
@@ -356,6 +377,10 @@ function defaultAnnotations() {
       contrast: 1.08,
       overlayOpacity: 0.72,
       queue: 'unlabeled',
+      discoveryQueue: 'all',
+      evidenceMap: data.discovery?.evidenceMaps?.[0]?.id || '',
+      showEvidence: false,
+      showSuggestions: true,
       minArea: 0,
       minEvents: 0
     }
@@ -366,6 +391,8 @@ function mergeAnnotations(incoming) {
   annotations = Object.assign(defaultAnnotations(), incoming || {});
   annotations.rois = Object.assign({}, incoming?.rois || {});
   annotations.events = Object.assign({}, incoming?.events || {});
+  annotations.suggestions = Object.assign({}, incoming?.suggestions || {});
+  annotations.promotedRois = Object.assign({}, incoming?.promotedRois || {});
   annotations.settings = Object.assign(defaultAnnotations().settings, incoming?.settings || {});
 }
 
@@ -420,6 +447,7 @@ function selectedRoi(){ return data.rois.find(r => r.id === selectedId) || data.
 function roiAnn(id){ return annotations.rois[id] || {state:'', notes:'', deleted:false}; }
 function eventKey(roiId, frame){ return `${roiId}:${frame}`; }
 function eventAnn(roiId, frame){ return annotations.events[eventKey(roiId, frame)] || {state:'', notes:''}; }
+function suggestionAnn(id){ return annotations.suggestions[id] || {state:'', artifactClass:'', notes:''}; }
 function setting(name){ return annotations.settings[name]; }
 function setSetting(name, value){ annotations.settings[name] = value; queueSave(); }
 function threshold(){ return Number(setting('eventThreshold')); }
@@ -491,6 +519,26 @@ function visibleRois(){
   return rows;
 }
 
+function selectedSuggestion(){
+  const suggestions = data.discovery?.suggestions || [];
+  return suggestions.find(s => s.id === selectedSuggestionId) || suggestions[0] || null;
+}
+function visibleSuggestions(){
+  const queue = setting('discoveryQueue') || 'all';
+  let rows = [...(data.discovery?.suggestions || [])];
+  rows = rows.filter(s => {
+    const ann = suggestionAnn(s.id);
+    if (queue === 'unlabeled') return !ann.state;
+    if (queue === 'promoted') return ann.state === 'promoted' || Boolean(annotations.promotedRois[s.id]);
+    if (queue === 'missed') return ann.state === 'missed';
+    if (queue === 'artifact') return ann.state === 'artifact';
+    if (queue === 'artifactSuspects') return s.artifactCue && s.artifactCue !== 'none';
+    return true;
+  });
+  rows.sort((a,b) => (b.discoveryScore || 0) - (a.discoveryScore || 0));
+  return rows;
+}
+
 function applySettingsToControls() {
   const pairs = [
     ['eventThreshold', 'eventThresholdLabel', 1],
@@ -510,12 +558,32 @@ function applySettingsToControls() {
     document.getElementById(label).textContent = Number(setting(id)).toFixed(digits);
   }
   document.getElementById('queueSelect').value = setting('queue');
+  document.getElementById('discoveryQueueSelect').value = setting('discoveryQueue') || 'all';
+  document.getElementById('evidenceSelect').value = setting('evidenceMap') || '';
+  document.getElementById('showEvidence').checked = Boolean(setting('showEvidence'));
+  document.getElementById('showSuggestions').checked = Boolean(setting('showSuggestions'));
   applyDisplaySettings();
+}
+
+function populateEvidenceSelect(){
+  const select = document.getElementById('evidenceSelect');
+  if(!select) return;
+  select.innerHTML = '';
+  for(const m of data.discovery?.evidenceMaps || []){
+    const opt = document.createElement('option');
+    opt.value = m.id;
+    opt.textContent = m.label;
+    select.appendChild(opt);
+  }
 }
 
 function applyDisplaySettings() {
   img.style.width = `${data.video.width * Number(setting('zoom'))}px`;
   img.style.filter = `brightness(${setting('brightness')}) contrast(${setting('contrast')})`;
+  evidenceImg.style.width = img.style.width;
+  const evidenceMap = (data.discovery?.evidenceMaps || []).find(m => m.id === setting('evidenceMap'));
+  evidenceImg.src = evidenceMap ? evidenceMap.file : '';
+  evidenceImg.style.opacity = setting('showEvidence') ? '0.58' : '0';
   ctx.globalAlpha = Number(setting('overlayOpacity'));
   resizeOverlay();
 }
@@ -531,11 +599,13 @@ function resizeOverlay(){
 
 function drawOverlay(){
   ctx.clearRect(0,0,overlay.width,overlay.height);
-  if(!document.getElementById('showRois').checked) return;
+  const showRois = document.getElementById('showRois').checked;
   const showLabels = document.getElementById('showLabels').checked;
   const showEvents = document.getElementById('showEvents').checked;
+  const showSuggestions = document.getElementById('showSuggestions').checked;
+  if(!showRois && !showSuggestions) return;
   const opacity = Number(setting('overlayOpacity'));
-  for(const roi of visibleRois()){
+  if(showRois) for(const roi of visibleRois()){
     const ann = roiAnn(roi.id);
     const isSel = roi.id === selectedId;
     const isEvent = showEvents && eventNearFrame(roi, currentFrame);
@@ -556,6 +626,32 @@ function drawOverlay(){
       ctx.lineWidth = 3;
       ctx.strokeText(String(roi.id), roi.centroidX + 5, roi.centroidY - 5);
       ctx.fillText(String(roi.id), roi.centroidX + 5, roi.centroidY - 5);
+    }
+  }
+  if(showSuggestions){
+    for(const s of visibleSuggestions()){
+      const ann = suggestionAnn(s.id);
+      const isSel = s.id === selectedSuggestionId;
+      let color = ann.state === 'promoted' || annotations.promotedRois[s.id] ? '#16a34a' :
+        ann.state === 'artifact' ? '#dc2626' :
+        ann.state === 'missed' ? '#facc15' :
+        ann.state === 'unsure' ? '#9333ea' : '#fb7185';
+      ctx.globalAlpha = isSel ? 0.96 : Math.max(0.38, opacity * 0.82);
+      ctx.fillStyle = color;
+      for(const p of s.points || []) ctx.fillRect(p[0], p[1], 1, 1);
+      ctx.globalAlpha = 1;
+      ctx.strokeStyle = isSel ? '#ffffff' : color;
+      ctx.lineWidth = isSel ? 2 : 1;
+      const r = Math.max(5, Math.sqrt((s.area || 20) / Math.PI) + 3);
+      ctx.beginPath(); ctx.arc(s.centroidX, s.centroidY, r, 0, Math.PI*2); ctx.stroke();
+      if(showLabels){
+        ctx.font = '10px Arial';
+        ctx.fillStyle = '#ffffff';
+        ctx.strokeStyle = '#111827';
+        ctx.lineWidth = 3;
+        ctx.strokeText(String(s.id), s.centroidX + 5, s.centroidY - 5);
+        ctx.fillText(String(s.id), s.centroidX + 5, s.centroidY - 5);
+      }
     }
   }
 }
@@ -616,6 +712,19 @@ function selectRoi(id){
   renderAll();
 }
 
+function selectSuggestion(id){
+  selectedSuggestionId = id;
+  const s = selectedSuggestion();
+  document.getElementById('suggestionNotes').value = s ? suggestionAnn(s.id).notes || '' : '';
+  document.getElementById('artifactClass').value = s ? suggestionAnn(s.id).artifactClass || '' : '';
+  if(s) {
+    selectedEventFrame = null;
+    currentFrame = Math.max(1, Math.min(data.video.frames, currentFrame));
+    selectionText.textContent = `Suggestion ${s.id}`;
+  }
+  renderAll();
+}
+
 function renderRoiList(){
   const root = document.getElementById('roiList');
   root.innerHTML = '';
@@ -647,9 +756,28 @@ function renderEventList(){
   }
 }
 
+function renderSuggestionList(){
+  const root = document.getElementById('suggestionList');
+  if(!root) return;
+  root.innerHTML = '';
+  const rows = visibleSuggestions();
+  document.getElementById('suggestionVisibleCount').textContent = rows.length;
+  for(const s of rows){
+    const ann = suggestionAnn(s.id);
+    const row = document.createElement('div');
+    row.className = 'suggestionRow' + (s.id === selectedSuggestionId ? ' sel' : '');
+    const state = annotations.promotedRois[s.id] ? 'promoted' : ann.state || 'new';
+    const cue = s.artifactCue && s.artifactCue !== 'none' ? `, ${s.artifactCue}` : '';
+    row.innerHTML = `<b>${s.id}</b><span>score ${Number(s.discoveryScore).toFixed(3)}, area ${s.area}${cue}</span><span class="badge ${ann.state || ''}">${state}</span>`;
+    row.onclick = () => selectSuggestion(s.id);
+    root.appendChild(row);
+  }
+}
+
 function updateCounts(){
   const allEvents = data.rois.reduce((sum, r) => sum + eventsForRoi(r).length, 0);
   let acc = 0, rej = 0, unsure = 0, eventAccepted = 0;
+  let promoted = 0, missed = 0, artifacts = 0;
   for(const r of data.rois){
     const st = roiAnn(r.id).state;
     if(st === 'accept') acc++;
@@ -657,12 +785,22 @@ function updateCounts(){
     if(st === 'unsure') unsure++;
     for(const ev of eventsForRoi(r)) if(eventAnn(r.id, ev.frame).state === 'accept') eventAccepted++;
   }
+  for(const s of data.discovery?.suggestions || []){
+    const ann = suggestionAnn(s.id);
+    if(annotations.promotedRois[s.id] || ann.state === 'promoted') promoted++;
+    if(ann.state === 'missed') missed++;
+    if(ann.state === 'artifact') artifacts++;
+  }
   document.getElementById('roiCount').textContent = data.rois.length;
   document.getElementById('eventCount').textContent = allEvents;
   document.getElementById('acceptedCount').textContent = acc;
   document.getElementById('rejectedCount').textContent = rej;
   document.getElementById('unsureCount').textContent = unsure;
   document.getElementById('eventAcceptedCount').textContent = eventAccepted;
+  document.getElementById('suggestionCount').textContent = data.discovery?.suggestions?.length || 0;
+  document.getElementById('promotedCount').textContent = promoted;
+  document.getElementById('missedCount').textContent = missed;
+  document.getElementById('artifactCount').textContent = artifacts;
 }
 
 function setRoiState(state){
@@ -685,6 +823,29 @@ function setEventState(state){
   renderAll();
 }
 
+function setSuggestionState(state){
+  const s = selectedSuggestion(); if(!s) return;
+  annotations.suggestions[s.id] = Object.assign(suggestionAnn(s.id), {state});
+  queueSave();
+  renderAll();
+}
+function promoteSuggestion(){
+  const s = selectedSuggestion(); if(!s) return;
+  annotations.suggestions[s.id] = Object.assign(suggestionAnn(s.id), {state:'promoted'});
+  annotations.promotedRois[s.id] = {
+    sourceSuggestion: s.id,
+    provenance: s.provenance || 'discovery',
+    centroidX: s.centroidX,
+    centroidY: s.centroidY,
+    area: s.area,
+    bbox: s.bbox,
+    points: s.points || [],
+    promotedAt: new Date().toISOString()
+  };
+  queueSave();
+  renderAll();
+}
+
 function renderButtons(){
   const roi = selectedRoi();
   const ann = roi ? roiAnn(roi.id) : {};
@@ -695,6 +856,10 @@ function renderButtons(){
   const eann = roi && selectedEventFrame ? eventAnn(roi.id, selectedEventFrame) : {};
   for (const [id, state] of [['eventAcceptBtn','accept'],['eventRejectBtn','reject'],['eventUnsureBtn','unsure']]) {
     document.getElementById(id).classList.toggle('active', eann.state === state);
+  }
+  const sann = selectedSuggestion() ? suggestionAnn(selectedSuggestion().id) : {};
+  for (const [id, state] of [['suggestionMissedBtn','missed'],['suggestionArtifactBtn','artifact'],['suggestionUnsureBtn','unsure']]) {
+    document.getElementById(id).classList.toggle('active', sann.state === state);
   }
 }
 
@@ -708,6 +873,7 @@ function renderAll(){
   renderButtons();
   renderRoiList();
   renderEventList();
+  renderSuggestionList();
   drawOverlay();
   drawTrace();
 }
@@ -722,7 +888,7 @@ function exportRows(type) {
       const notes = (ann.notes || '').split(String.fromCharCode(9)).join(' ').split(newline).join(' ');
       rows.push([roi.id, ann.state || '', ann.deleted ? 1 : 0, notes, roi.centroidX, roi.centroidY, roi.area, roi.peakScore, eventsForRoi(roi).length, roi.noiseSigma].join('\t'));
     }
-  } else {
+  } else if (type === 'event') {
     rows.push('roi_id\tframe\tstate\tnotes\tz\tamplitude\troi_state');
     for(const roi of data.rois){
       for(const ev of eventsForRoi(roi)){
@@ -731,11 +897,18 @@ function exportRows(type) {
         rows.push([roi.id, ev.frame, ann.state || '', notes, ev.z.toFixed(4), ev.amplitude.toFixed(6), roiAnn(roi.id).state || ''].join('\t'));
       }
     }
+  } else {
+    rows.push('suggestion_id\tstate\tartifact_class\tnotes\tpromoted\tcentroid_x\tcentroid_y\tarea\tdiscovery_score\tmax_z\tactive_frames\tartifact_cue\tprovenance');
+    for(const s of data.discovery?.suggestions || []){
+      const ann = suggestionAnn(s.id);
+      const notes = (ann.notes || '').split(String.fromCharCode(9)).join(' ').split(newline).join(' ');
+      rows.push([s.id, ann.state || '', ann.artifactClass || '', notes, annotations.promotedRois[s.id] ? 1 : 0, s.centroidX, s.centroidY, s.area, s.discoveryScore, s.maxZ, s.activeFrames, s.artifactCue || '', s.provenance || ''].join('\t'));
+    }
   }
   const blob = new Blob([rows.join(newline) + newline], {type:'text/tab-separated-values'});
   const a = document.createElement('a');
   a.href = URL.createObjectURL(blob);
-  a.download = type === 'roi' ? 'neuron_roi_annotations.tsv' : 'neuron_event_annotations.tsv';
+  a.download = type === 'roi' ? 'neuron_roi_annotations.tsv' : type === 'event' ? 'neuron_event_annotations.tsv' : 'neuron_discovery_suggestions.tsv';
   a.click();
   URL.revokeObjectURL(a.href);
 }
@@ -777,6 +950,9 @@ function initControls(){
   document.getElementById('fitBtn').onclick = fitWidth;
   document.getElementById('fullscreenBtn').onclick = () => viewerScroll.requestFullscreen?.();
   for(const id of ['showRois','showLabels','showEvents']) document.getElementById(id).onchange = drawOverlay;
+  document.getElementById('showSuggestions').onchange = e => { setSetting('showSuggestions', e.target.checked); drawOverlay(); };
+  document.getElementById('showEvidence').onchange = e => { setSetting('showEvidence', e.target.checked); applyDisplaySettings(); };
+  document.getElementById('evidenceSelect').onchange = e => { setSetting('evidenceMap', e.target.value); applyDisplaySettings(); };
   for(const id of ['eventThreshold','kalmanGain','spikeGain','zoom','brightness','contrast','overlayOpacity','minArea','minEvents']) {
     document.getElementById(id).oninput = e => {
       const value = Number(e.target.value);
@@ -795,8 +971,21 @@ function initControls(){
   document.getElementById('eventRejectBtn').onclick = () => setEventState('reject');
   document.getElementById('eventUnsureBtn').onclick = () => setEventState('unsure');
   document.getElementById('eventClearBtn').onclick = () => setEventState('');
+  document.getElementById('suggestionPromoteBtn').onclick = promoteSuggestion;
+  document.getElementById('suggestionMissedBtn').onclick = () => setSuggestionState('missed');
+  document.getElementById('suggestionArtifactBtn').onclick = () => setSuggestionState('artifact');
+  document.getElementById('suggestionUnsureBtn').onclick = () => setSuggestionState('unsure');
+  document.getElementById('suggestionClearBtn').onclick = () => setSuggestionState('');
+  document.getElementById('artifactClass').onchange = e => {
+    const s = selectedSuggestion(); if(!s) return;
+    annotations.suggestions[s.id] = Object.assign(suggestionAnn(s.id), {artifactClass:e.target.value});
+    queueSave();
+    renderAll();
+  };
+  document.getElementById('discoveryQueueSelect').onchange = e => { setSetting('discoveryQueue', e.target.value); renderAll(); };
   document.getElementById('exportRoiBtn').onclick = () => exportRows('roi');
   document.getElementById('exportEventBtn').onclick = () => exportRows('event');
+  document.getElementById('exportSuggestionBtn').onclick = () => exportRows('suggestion');
   roiNotes.oninput = e => {
     const roi = selectedRoi(); if(!roi) return;
     annotations.rois[roi.id] = Object.assign(roiAnn(roi.id), {notes:e.target.value});
@@ -807,16 +996,26 @@ function initControls(){
     annotations.events[eventKey(roi.id, selectedEventFrame)] = Object.assign(eventAnn(roi.id, selectedEventFrame), {notes:e.target.value});
     queueSave();
   };
+  document.getElementById('suggestionNotes').oninput = e => {
+    const s = selectedSuggestion(); if(!s) return;
+    annotations.suggestions[s.id] = Object.assign(suggestionAnn(s.id), {notes:e.target.value});
+    queueSave();
+  };
   overlay.onclick = e => {
     const rect = overlay.getBoundingClientRect();
     const x = (e.clientX - rect.left) * data.video.width / rect.width;
     const y = (e.clientY - rect.top) * data.video.height / rect.height;
-    let best = null, bestD = Infinity;
+    let best = null, bestD = Infinity, bestType = 'roi';
     for(const roi of visibleRois()){
       const dx = x - roi.centroidX, dy = y - roi.centroidY, d = dx*dx + dy*dy;
-      if(d < bestD){ bestD = d; best = roi; }
+      if(d < bestD){ bestD = d; best = roi; bestType = 'roi'; }
     }
-    if(best) selectRoi(best.id);
+    if(document.getElementById('showSuggestions').checked) for(const s of visibleSuggestions()){
+      const dx = x - s.centroidX, dy = y - s.centroidY, d = dx*dx + dy*dy;
+      if(d < bestD){ bestD = d; best = s; bestType = 'suggestion'; }
+    }
+    if(bestType === 'suggestion') selectSuggestion(best.id);
+    else if(best) selectRoi(best.id);
   };
   document.addEventListener('keydown', e => {
     if(e.target.tagName === 'TEXTAREA' || e.target.tagName === 'INPUT') return;
@@ -833,12 +1032,15 @@ function initControls(){
     else if(e.key === 'e') setEventState('accept');
     else if(e.key === 'x') setEventState('reject');
     else if(e.key === 'f') viewerScroll.requestFullscreen?.();
+    else if(e.key === 'm') setSuggestionState('missed');
+    else if(e.key === 'g') promoteSuggestion();
   });
   img.onload = resizeOverlay;
   window.onresize = resizeOverlay;
 }
 
 async function boot(){
+  populateEvidenceSelect();
   await loadAnnotations();
   initControls();
   renderParams();
@@ -848,6 +1050,10 @@ async function boot(){
     selectedEventFrame = eventsForRoi(selectedRoi())[0]?.frame || null;
     roiNotes.value = roiAnn(selectedId).notes || '';
     eventNotes.value = selectedEventFrame ? eventAnn(selectedId, selectedEventFrame).notes || '' : '';
+  }
+  if(selectedSuggestionId) {
+    document.getElementById('suggestionNotes').value = suggestionAnn(selectedSuggestionId).notes || '';
+    document.getElementById('artifactClass').value = suggestionAnn(selectedSuggestionId).artifactClass || '';
   }
   setFrame(1);
   renderAll();
@@ -884,6 +1090,9 @@ HTML_TEMPLATE = """<!doctype html>
       <label><input id="showRois" type="checkbox" checked> ROIs</label>
       <label><input id="showLabels" type="checkbox" checked> IDs</label>
       <label><input id="showEvents" type="checkbox" checked> event frames</label>
+      <label><input id="showSuggestions" type="checkbox" checked> suggestions</label>
+      <label><input id="showEvidence" type="checkbox"> evidence map</label>
+      <select id="evidenceSelect"></select>
       <label>Overlay <input id="overlayOpacity" type="range" min="0.1" max="1" step="0.02"> <span id="overlayOpacityLabel">0.72</span></label>
       <label>event z <input id="eventThreshold" type="range" min="1.2" max="5" step="0.1"> <span id="eventThresholdLabel">2.4</span></label>
       <label>Kalman gain <input id="kalmanGain" type="range" min="0.01" max="0.18" step="0.005"> <span id="kalmanGainLabel">0.060</span></label>
@@ -892,6 +1101,7 @@ HTML_TEMPLATE = """<!doctype html>
     <div class="viewerScroll" id="viewerScroll">
       <div class="viewerWrap" id="viewerWrap">
         <img id="frameImg" alt="video frame">
+        <img id="evidenceImg" alt="evidence map">
         <canvas id="overlay"></canvas>
       </div>
     </div>
@@ -914,11 +1124,16 @@ HTML_TEMPLATE = """<!doctype html>
     <div class="metricGrid">
       <div class="metric"><b id="roiCount"></b><span>candidate ROIs</span></div>
       <div class="metric"><b id="visibleCount"></b><span>visible in queue</span></div>
+      <div class="metric"><b id="suggestionCount"></b><span>missed suggestions</span></div>
+      <div class="metric"><b id="suggestionVisibleCount"></b><span>visible suggestions</span></div>
       <div class="metric"><b id="eventCount"></b><span>events at threshold</span></div>
       <div class="metric"><b id="eventAcceptedCount"></b><span>accepted events</span></div>
       <div class="metric"><b id="acceptedCount"></b><span>accepted ROIs</span></div>
       <div class="metric"><b id="rejectedCount"></b><span>rejected ROIs</span></div>
       <div class="metric"><b id="unsureCount"></b><span>unsure ROIs</span></div>
+      <div class="metric"><b id="promotedCount"></b><span>promoted missed</span></div>
+      <div class="metric"><b id="missedCount"></b><span>marked missed</span></div>
+      <div class="metric"><b id="artifactCount"></b><span>artifact suggestions</span></div>
       <div class="metric"><b>{frames}</b><span>frames</span></div>
     </div>
     <h2>ROI Review</h2>
@@ -939,6 +1154,34 @@ HTML_TEMPLATE = """<!doctype html>
     </div>
     <textarea id="eventNotes" rows="2" placeholder="Notes for selected event"></textarea>
     <div class="eventList" id="eventList"></div>
+    <h2>Discovery</h2>
+    <div class="buttonRow">
+      <button id="suggestionPromoteBtn" class="accept">Promote</button>
+      <button id="suggestionMissedBtn">Missed Neuron</button>
+      <button id="suggestionArtifactBtn" class="reject">Artifact</button>
+      <button id="suggestionUnsureBtn" class="unsure">Unsure</button>
+      <button id="suggestionClearBtn">Clear</button>
+    </div>
+    <select id="artifactClass" style="width:100%;margin:6px 0;height:30px">
+      <option value="">Artifact class</option>
+      <option value="vessel_static_structure">Vessel/static structure</option>
+      <option value="impulse_noise">Impulse noise</option>
+      <option value="border_artifact">Border artifact</option>
+      <option value="saturation_bright_blob">Saturation/bright blob</option>
+      <option value="uncertain_artifact">Uncertain artifact</option>
+    </select>
+    <textarea id="suggestionNotes" rows="2" placeholder="Notes for selected discovery suggestion"></textarea>
+    <div class="toolbar">
+      <select id="discoveryQueueSelect">
+        <option value="all">All suggestions</option>
+        <option value="unlabeled">Unlabeled</option>
+        <option value="promoted">Promoted</option>
+        <option value="missed">Marked missed</option>
+        <option value="artifact">Artifacts</option>
+        <option value="artifactSuspects">Artifact suspects</option>
+      </select>
+    </div>
+    <div class="suggestionList" id="suggestionList"></div>
     <h2>Review Queue</h2>
     <div class="toolbar">
       <select id="queueSelect">
@@ -960,6 +1203,7 @@ HTML_TEMPLATE = """<!doctype html>
     <div class="buttonRow">
       <button id="exportRoiBtn">Export ROI TSV</button>
       <button id="exportEventBtn">Export Event TSV</button>
+      <button id="exportSuggestionBtn">Export Discovery TSV</button>
     </div>
     <h2>Parameters</h2>
     <table class="smallTable" id="paramTable"></table>
