@@ -1,5 +1,9 @@
 Outputs/
 Inputs/*.tif
 Inputs/*.tiff
+Inputs/**/*.tif
+Inputs/**/*.tiff
+Inputs/*.zip
+Inputs/*/
 __pycache__/
 *.pyc

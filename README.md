@@ -1,13 +1,18 @@
-# Neuron Detection Grid Search Pipeline
+# Separable Gamma CFAR And Neuron Review Workbench
 
-A complete, modular pipeline for **neuron detection** in voltage-imaging videos.
-It supports interchangeable **pre-processing filters** (Gamma spatio-temporal and Kalman–MCC background subtraction), **CFAR** detection, **parallel grid search**, and a rich suite of **reports & figures**.
+A toolkit for scientific calcium/voltage-imaging videos. The repository now has
+two complementary workflows:
+
+- a Python grid-search pipeline for Gamma/Kalman-MCC filtering, CFAR detection,
+  and report generation
+- a Fiji/Groovy plus browser workbench workflow for neuron ROI review, trace
+  denoising, event annotation, and user-guided parameter iteration
 
 ---
 
 ## Features
 
-* **Interchangeable pre-processing filters**
+* **Interchangeable pre-processing filters for grid search**
 
   * **Gamma ST filter** (spatio-temporal enhancement)
   * **Kalman–MCC** (robust background estimation via maximum correntropy)
@@ -21,6 +26,14 @@ It supports interchangeable **pre-processing filters** (Gamma spatio-temporal an
   * Per-model detailed reports with diagnostics
   * Event duration histogram, FROC, sensitivity heatmaps
   * PSD comparison, frame-wise power, qualitative montages, error maps
+* **Neuron annotation workbench**
+
+  * large video review surface with zoom, fullscreen, contrast, and overlay controls
+  * ROI-level accept/reject/unsure review
+  * event-level accept/reject/unsure review
+  * trace-level robust Kalman baseline/event visualization
+  * local autosave to `annotations.json`
+  * ROI and event TSV exports for downstream inverse-dynamics analysis
 * **Clean, modular codebase** (easy to add new filters or detectors)
 
 ---
@@ -44,6 +57,16 @@ It supports interchangeable **pre-processing filters** (Gamma spatio-temporal an
 ├── reporting/
 │   ├── generators.py
 │   └── plotters.py
+├── tools/
+│   ├── temporal_highpass_gaussian.ijm
+│   ├── candidate_event_pipeline.groovy
+│   ├── temporal_candidate_scoring.groovy
+│   ├── generate_neuron_review_app.groovy
+│   ├── build_neuron_workbench_v2.py
+│   └── serve_neuron_workbench.py
+├── docs/
+│   ├── NEURON_WORKBENCH.md
+│   └── PROCESSING_NOTES.md
 ├── Inputs/
 └── Outputs/
 ```
@@ -174,6 +197,8 @@ KALMAN_PARAMS = {
 
 ## Running
 
+### Python Grid Search
+
 ```bash
 python main.py
 ```
@@ -191,6 +216,39 @@ What happens:
    * Per-model `Rank_*_Report/` folders
    * Figures (`.png`) and diagnostics (`.tif`, `.csv`)
 
+### Neuron Review Workbench
+
+The workbench path is intended for interactive scientific review of candidate
+neurons and firing events. It depends on Fiji/ImageJ for TIFF stack handling and
+uses stdlib Python for the local browser UI/autosave server.
+
+1. Run the Fiji/Groovy review-data generator:
+
+```bash
+fiji --headless --run '/home/jibby2k1/CNEL/State Analysis (Fish)/Separable-Gamma-CFAR/tools/generate_neuron_review_app.groovy'
+```
+
+2. Build the v2 workbench UI:
+
+```bash
+python3 tools/build_neuron_workbench_v2.py
+```
+
+3. Start the local autosave server:
+
+```bash
+python3 tools/serve_neuron_workbench.py --port 8765
+```
+
+4. Open:
+
+```text
+http://127.0.0.1:8765/
+```
+
+See [docs/NEURON_WORKBENCH.md](docs/NEURON_WORKBENCH.md) for annotation
+shortcuts, autosave details, and export format notes.
+
 ---
 
 ## Outputs & Figures
@@ -204,6 +262,22 @@ What happens:
 * **Error maps**: `fig_fp_density.png`, `fig_fn_per_id.png`
 * **Per-model video stack**: `diagnostic_video.tif` (raw | features | z-score | pre/post masks)
 
+Workbench outputs are written under:
+
+```bash
+Outputs/NeuronReview/calcium_video_2/app/
+```
+
+Important workbench files:
+
+* `review_data.json`: generated ROI, trace, event, and video metadata
+* `annotations.json`: autosaved user labels and notes
+* `roi_summary.tsv`: compact candidate ROI summary
+* `frames/frame_###.png`: browser frame assets
+
+`Outputs/` is ignored by git. Export ROI/event TSVs from the workbench when a
+review pass is ready for downstream analysis.
+
 ---
 
 ## Tips & Performance
@@ -216,6 +290,10 @@ What happens:
   * Prefer GPU with CuPy if available
 * Ensure your ground-truth CSV covers valid frame indices.
 * If a plot looks off, delete the affected `Outputs/` folder and re-run to regenerate artifacts.
+* For sparse firing events, prefer trace-level denoising over aggressive
+  pixel-level video smoothing. See [docs/PROCESSING_NOTES.md](docs/PROCESSING_NOTES.md).
+* Do not commit generated scientific data or output stacks. Commit reusable
+  scripts and documentation only unless a data commit is explicitly intended.
 
 ---
 
@@ -232,7 +310,7 @@ What happens:
 
 ## License
 
-MIT — do whatever you want, just don’t blame us if it breaks 😊
+MIT - do whatever you want, just don't blame us if it breaks.
 
 ---
 
