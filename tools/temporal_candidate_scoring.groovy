@@ -37,28 +37,43 @@ final Path highPassDir = outputRoot.resolve("HighPass").resolve(datasetId)
 final Path candidateDir = outputRoot.resolve("CandidateEventPipeline").resolve(datasetId)
 final Path outputDir = outputRoot.resolve("TemporalCandidateScoring").resolve(datasetId)
 
-final int preFrames = 4
-final int rawPostFrames = 8
-final int hpSideFrames = 4
-final int roiExpansion = 1
+final int preFrames = Integer.parseInt(setting("trace_pre_frames", "4"))
+final int rawPostFrames = Integer.parseInt(setting("trace_raw_post_frames", "8"))
+final int hpSideFrames = Integer.parseInt(setting("trace_hp_side_frames", "4"))
+final int roiExpansion = Integer.parseInt(setting("trace_roi_expansion_px", "1"))
 final double[] scoreCutoffs = [0.25d, 0.50d, 0.75d] as double[]
+final String requestedSigmaLabel = setting("sigma_label", "")
+final String requestedPresetName = setting("component_preset_name", "")
 
 final List<Map<String, String>> variants = [
     [label: "sigma04", hpFile: "${datasetId}_hp_gaussian_sigma04f_float32.tif"],
     [label: "sigma06", hpFile: "${datasetId}_hp_gaussian_sigma06f_float32.tif"],
     [label: "sigma08", hpFile: "${datasetId}_hp_gaussian_sigma08f_float32.tif"],
 ]
+final List<Map<String, String>> activeVariants = requestedSigmaLabel.isBlank()
+    ? variants
+    : [[label: "sigma${requestedSigmaLabel}", hpFile: "${datasetId}_hp_gaussian_sigma${requestedSigmaLabel}f_float32.tif"]]
 
 final List<Map<String, String>> presets = [
     [name: "permissive", tag: "permissive_seed014_grow007_min3"],
     [name: "balanced", tag: "balanced_seed017_grow009_min3"],
     [name: "strict", tag: "strict_seed020_grow011_min4"],
 ]
+final List<Map<String, String>> activePresets = requestedPresetName.isBlank()
+    ? presets
+    : [[
+        name: requestedPresetName,
+        tag: "${requestedPresetName}_seed${thresholdTag(Double.parseDouble(setting("component_seed_z", "2.0")))}_grow${thresholdTag(Double.parseDouble(setting("component_grow_z", "1.1")))}_min${Integer.parseInt(setting("component_min_area_px", "4"))}"
+    ]]
 
 Files.createDirectories(outputDir)
 
 static String scoreTag(double score) {
     return String.format("%03d", Math.round(score * 100.0d) as int)
+}
+
+static String thresholdTag(double value) {
+    return String.format("%03d", Math.round(value * 10.0d) as int)
 }
 
 static double clamp01(double x) {
@@ -198,7 +213,7 @@ Files.newBufferedWriter(temporalEvents).withCloseable { eventWriter ->
         eventWriter.write("variant\tpreset\tframe\tcomponent_id\tarea\tcentroid_x\tcentroid_y\tpeak_z\tmean_z\tmin_x\tmin_y\tmax_x\tmax_y\tbbox_width\tbbox_height\tfill_fraction\taspect_ratio\traw_baseline\traw_at_t\traw_post_max\traw_rise\traw_z\thp_at_t\thp_peak_abs\thp_z\tcoincidence_score\tcollapse_penalty\ttemporal_score\n")
         summaryWriter.write("variant\tpreset\tcutoff\tkept_components\tkept_pixels\tmean_components_per_frame\tmean_pixels_per_frame\n")
 
-        variants.each { variant ->
+        activeVariants.each { variant ->
             String variantLabel = variant.label
             Path hpPath = highPassDir.resolve(variant.hpFile)
             println("Loading high-pass stack and integrals for ${variantLabel}: ${hpPath}")
@@ -207,7 +222,7 @@ Files.newBufferedWriter(temporalEvents).withCloseable { eventWriter ->
             double[][] hpIntegrals = integralStack(hpImp)
             hpImp.close()
 
-            presets.each { preset ->
+            activePresets.each { preset ->
                 String presetName = preset.name
                 String presetTag = preset.tag
                 Path labelsPath = candidateDir.resolve("${datasetId}_${variantLabel}_${presetTag}_labels.tif")

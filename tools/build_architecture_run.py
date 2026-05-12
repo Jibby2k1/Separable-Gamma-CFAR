@@ -29,6 +29,7 @@ def build_run(review_data_path: Path, dataset_id: str, run_id: str, label: str, 
             {"name": "trace_event_scoring", "params": {"event_threshold_z": review_data.get("parameters", {}).get("eventZThreshold")}},
         ],
         "parameters": review_data.get("parameters", {}),
+        "execution": {"status": "completed"},
         "summary": {
             "roi_count": len(review_data.get("rois", [])),
             "event_count": sum(len(roi.get("events", [])) for roi in review_data.get("rois", [])),
@@ -37,12 +38,23 @@ def build_run(review_data_path: Path, dataset_id: str, run_id: str, label: str, 
         },
         "artifacts": {
             "review_data": str(review_data_path),
+            "app_url": "index.html",
             "frames": str(app_dir / "frames"),
+            "intermediates": [],
             "evidence_maps": review_data.get("discovery", {}).get("evidenceMaps", []),
             "roi_summary_tsv": str(app_dir / "roi_summary.tsv"),
             "discovery_suggestions_tsv": str(app_dir / "discovery_suggestions.tsv"),
         },
     }
+    analysis_json = app_dir / "analysis" / "proposal_analysis.json"
+    artifact_tsv = app_dir / "analysis" / "artifact_classifier.tsv"
+    proposals_tsv = app_dir / "analysis" / "missed_neuron_proposals.tsv"
+    if analysis_json.exists():
+        run["artifacts"]["proposal_analysis"] = str(analysis_json)
+    if artifact_tsv.exists():
+        run["artifacts"]["artifact_classifier_tsv"] = str(artifact_tsv)
+    if proposals_tsv.exists():
+        run["artifacts"]["missed_neuron_proposals_tsv"] = str(proposals_tsv)
     if annotations_path and annotations_path.exists():
         run["annotation_summary"] = compute_annotation_summary(review_data, load_json(annotations_path))
         run["artifacts"]["annotations"] = str(annotations_path)

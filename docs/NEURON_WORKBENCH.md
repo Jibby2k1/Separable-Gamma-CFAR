@@ -109,9 +109,9 @@ python3 tools/run_neuron_review_pipeline.py \
 ```
 
 The runner executes high-pass filtering, event-preserving denoising, candidate
-generation, temporal scoring, review-data generation, the v2 workbench build,
-and the multi-dataset index build. Use `--dry-run` to print the exact commands
-without running Fiji.
+generation, temporal scoring, review-data generation, proposal/artifact
+analysis, the v2 workbench build, and the multi-dataset index build. Use
+`--dry-run` to print the exact commands without running Fiji.
 
 ## Run With Autosave
 
@@ -132,10 +132,31 @@ The server supports:
 - `GET /`: workbench app
 - `GET /annotations.json`: current annotation state
 - `GET /architecture_runs.json`: attached architecture-run metadata
+- `GET /api/environment`: local Fiji/Python/GPU readiness for generation
+- `POST /api/jobs/generate-view`: start a whitelisted local generation job
+- `POST /api/jobs/generate-preview`: start the same run-aware generator without
+  rebuilding the multi-dataset index
+- `GET /api/jobs` and `GET /api/jobs/<job_id>`: generation status and logs
 - `PUT /annotations.json`: autosave endpoint
 
 Writes are atomic: the server writes a temporary JSON file and then replaces
 `annotations.json`.
+
+When `NEUROBENCH_OWNER_TOKEN` is set in the server environment, generation
+endpoints require the dashboard's **Unlock Generation** control. The browser
+sends the token as `X-Neurobench-Owner-Token`; the token is never exposed by
+`GET /api/environment`. This is the recommended mode before sharing the
+dashboard through a tunnel.
+
+Generated Architecture Lab runs are written under the dataset app instead of
+overwriting the baseline review data:
+
+```text
+Outputs/NeuronReview/<dataset>/app/generated_runs/<run_id>/
+```
+
+Each generated run receives its own `review_data.json`, frames, intermediate
+frame exports, status, logs, and app URL in `architecture_runs.json`.
 
 For a multi-dataset workbench index, serve the review root instead:
 
@@ -148,6 +169,21 @@ python3 tools/serve_neuron_workbench.py \
 Then `/` shows all processed dataset dashboards, and autosave writes only to
 safe per-dataset files under `*/app/annotations.json` or
 `*/app/architecture_runs.json`.
+
+For short-term peer access, run the server locally and expose it with a tunnel.
+Use owner-only generation so peers can inspect dashboards without launching
+jobs on your machine:
+
+```bash
+export NEUROBENCH_OWNER_TOKEN="choose-a-private-token"
+python3 tools/serve_neuron_workbench.py \
+  --root-dir Outputs/NeuronReview \
+  --host 127.0.0.1 \
+  --port 8765
+```
+
+Then expose `http://127.0.0.1:8765` with Cloudflare Tunnel, ngrok, Tailscale
+Funnel, or another tunnel tool and share the generated public URL.
 
 ## Review Layout
 
@@ -163,10 +199,54 @@ The Review page is organized for repeated ROI triage:
   labeling controls visible while hiding lower-frequency panels such as
   discovery, advanced scoring, or audit details
 - collapse state is a workflow preference, not an annotation label
+- the `Next annotation batch` queue ranks unlabeled ROIs that are most useful
+  for the first tuning pass, using event support, trace SNR, local coherence,
+  artifact cues, and existing priority scores
+- `Guided Review` turns that batch into one task at a time, with a prompt,
+  reason badges, progress goals, and next/previous task controls
 
 The reorganization should not change the saved scientific meaning of
 `annotations.json`; it only makes the same review operations easier to scan and
 use during long labeling sessions.
+
+## Build A Review Batch
+
+Use the annotation-batch helper when you want a concrete labeling worklist
+outside the browser:
+
+```bash
+python3 tools/build_annotation_batch.py \
+  --review-data Outputs/NeuronReview/calcium_rest_cropped/app/review_data.json \
+  --annotations Outputs/NeuronReview/calcium_rest_cropped/app/annotations.json \
+  --out Outputs/NeuronReview/calcium_rest_cropped/annotation_batch.json \
+  --out-dir Outputs/NeuronReview/calcium_rest_cropped/annotation_batch
+```
+
+The batch contains prioritized ROIs, event frames, and discovery suggestions,
+with short reasons for each item. The first useful tuning milestone is about
+`20` reviewed ROIs and `20` reviewed events; before that, parameter comparisons
+are still mostly qualitative.
+
+When `--out-dir` is supplied, the helper also writes `review_tasks.tsv` and
+`review_task_features.tsv`. Those feature rows are the bridge to a later
+active-learning ranker; until enough labels exist, they should be interpreted
+as transparent heuristic guidance.
+
+## Generate A Review Report
+
+After or during a review session, build a compact report for lab discussion:
+
+```bash
+python3 tools/build_review_report.py \
+  --review-data Outputs/NeuronReview/calcium_rest_cropped/app/review_data.json \
+  --annotations Outputs/NeuronReview/calcium_rest_cropped/app/annotations.json \
+  --out-json Outputs/NeuronReview/calcium_rest_cropped/review_report.json \
+  --out-md Outputs/NeuronReview/calcium_rest_cropped/review_report.md
+```
+
+The dashboard `Report` tab shows the same summary in-browser and can download
+a Markdown version. The report is meant to communicate review progress,
+accepted outputs, next candidates to inspect, and recommended next actions.
 
 ## Annotation Files
 
@@ -306,6 +386,20 @@ browser.
 Planned pipeline manifests should be treated as requested or proposed work
 until a real run artifact exists. Once a pipeline has actually executed, attach
 its produced architecture-run manifest to compare it with the current baseline.
+Review, Architecture Lab, and Process Lab share the active run selection. If a
+selected run has reachable `review_data.json`, Review can load it; if it is
+only planned, the app can start a local Generate View job through the server.
+Generation is still local and whitelisted: the browser can choose the run and
+backend, but it cannot submit arbitrary shell commands. The default backend
+uses the existing Fiji/Groovy pipeline and exports QC intermediate frame tiles;
+the Python GPU option is shown only as an explicit backend choice and reports
+CUDA readiness before starting.
+
+Architecture Lab includes a Parameter Experiments table. Use it to label
+generated runs or sweep outputs as `looks best`, `too noisy`, `too strict`,
+`artifact heavy`, or `needs review`, then open the same active run in Review or
+Process Lab. These labels are workflow notes stored with dashboard settings,
+not scientific ground truth.
 
 ## Metrics/Audit
 
@@ -324,11 +418,35 @@ The Review queue also includes v3-specific filters for needs-action ROIs,
 control-ready ROIs, problematic traces, priority score, local correlation,
 event support, trace SNR, and artifact risk.
 
-## Dataset QC
+## Process Lab
 
-The generated app includes a Dataset QC page at `#qc`. It audits lightweight
+The generated app includes a Process Lab page at `#process`. It audits lightweight
 video and candidate-set properties such as ROI size, trace noise, event density,
 discovery burden, artifact cues, and evidence-map thumbnails.
+
+Process Lab uses one synchronized frame slider for the raw video and any
+generated intermediate stage frames declared in `artifacts.intermediates`.
+Stages without exported browser-readable frames remain visible as missing-output
+tiles.
+
+Process Lab also includes a Discovery and Artifact Triage section. It surfaces
+high-priority missed-neuron candidates and ROI artifact-risk reasons such as
+large/merged footprints, low local coherence, background correlation,
+elongation, near-border location, and existing artifact labels.
+
+When available, that triage table is loaded from
+`analysis/proposal_analysis.json`, which is produced by:
+
+```bash
+python3 tools/build_proposal_analysis.py \
+  --review-data Outputs/NeuronReview/calcium_rest_cropped/app/review_data.json \
+  --annotations Outputs/NeuronReview/calcium_rest_cropped/app/annotations.json \
+  --architecture-runs Outputs/NeuronReview/calcium_rest_cropped/app/architecture_runs.json \
+  --run-id current_review_pipeline
+```
+
+The same command also writes `artifact_classifier.tsv` and
+`missed_neuron_proposals.tsv` for sharing or spreadsheet review.
 
 If `pixel_size_microns` is present in the dataset manifest, the QC page also
 reports equivalent ROI diameters in microns. Without that manifest field,

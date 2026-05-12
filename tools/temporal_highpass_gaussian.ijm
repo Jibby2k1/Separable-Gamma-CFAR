@@ -24,6 +24,13 @@ outputHighPass = outputRoot + "/HighPass";
 outputDir = outputHighPass + "/" + datasetId;
 sigmas = newArray(4, 6, 8);
 labels = newArray("04", "06", "08");
+requestedSigma = argValue(args, "sigma_frames", "");
+requestedLabel = argValue(args, "sigma_label", "");
+if (requestedSigma != "") {
+    if (requestedLabel == "") requestedLabel = "custom";
+    sigmas = newArray(parseFloat(requestedSigma));
+    labels = newArray(requestedLabel);
+}
 
 File.makeDirectory(outputRoot);
 File.makeDirectory(outputHighPass);
@@ -41,7 +48,12 @@ summary += "dataset_id=" + datasetId + "\n";
 summary += "input_path=" + inputPath + "\n";
 summary += "output_dir=" + outputDir + "\n";
 summary += "formula=high_pass = raw_32bit - GaussianBlur3D(raw_32bit, x=0, y=0, z=sigma_frames)\n";
-summary += "sigma_frames=4,6,8\n";
+summary += "sigma_frames=";
+for (i = 0; i < sigmas.length; i++) {
+    if (i > 0) summary += ",";
+    summary += sigmas[i];
+}
+summary += "\n";
 summary += "output_dtype=32-bit float signed residual TIFF stack\n";
 summary += "width=" + width + "\n";
 summary += "height=" + height + "\n";

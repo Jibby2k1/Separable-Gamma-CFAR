@@ -323,6 +323,63 @@ details[open] > summary {
   color: var(--muted);
   font-size: 12px;
 }
+.guidedPanelShell {
+  border: 1px solid #bae6fd;
+  background: #f0f9ff;
+  border-radius: 8px;
+  padding: 9px;
+  margin: 8px 0 12px;
+}
+#reviewModeToggle.guidedActive {
+  background: #0f172a;
+  color: #ffffff;
+  border-color: #0f172a;
+}
+.guidedHero {
+  background: #ffffff;
+  border: 1px solid #dbeafe;
+  border-radius: 8px;
+  padding: 10px;
+}
+.guidedHero h3 {
+  margin: 6px 0;
+  font-size: 15px;
+  line-height: 1.25;
+}
+.reasonPills {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+.reasonPills span {
+  border: 1px solid #bfdbfe;
+  color: #075985;
+  background: #eff6ff;
+  border-radius: 999px;
+  padding: 2px 7px;
+  font-size: 11px;
+  font-weight: 700;
+}
+.goalGrid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 6px;
+  margin: 8px 0;
+}
+.goalGrid div {
+  background: #ffffff;
+  border: 1px solid #dbeafe;
+  border-radius: 7px;
+  padding: 7px;
+}
+.goalGrid b,
+.goalGrid span {
+  display: block;
+}
+.goalGrid span {
+  color: var(--muted);
+  font-size: 11px;
+}
 .roiList {
   max-height: 245px;
   overflow: auto;
@@ -438,6 +495,55 @@ textarea {
 }
 .saveState.ok { color: var(--ok); }
 .saveState.bad { color: var(--bad); }
+.runSyncBar {
+  justify-content: flex-start;
+}
+.runSyncStatus {
+  color: var(--muted);
+  font-size: 12px;
+  border: 1px solid #dbeafe;
+  background: #eff6ff;
+  border-radius: 999px;
+  padding: 5px 9px;
+}
+.runGeneratePanel {
+  display: grid;
+  grid-template-columns: minmax(220px, 0.7fr) minmax(320px, 1.3fr);
+  gap: 10px;
+  background: #ffffff;
+  border: 1px solid #bae6fd;
+  border-radius: 8px;
+  padding: 10px;
+}
+.runGeneratePanel pre {
+  margin: 0;
+  white-space: pre-wrap;
+  background: #0f172a;
+  color: #e5edf7;
+  border-radius: 7px;
+  padding: 10px;
+  font-size: 12px;
+  line-height: 1.4;
+}
+.jobStatusBox {
+  border: 1px solid #bae6fd;
+  background: #f0f9ff;
+  border-radius: 8px;
+  padding: 9px;
+  margin-bottom: 8px;
+}
+.jobStatusBox.ok {
+  border-color: #bbf7d0;
+  background: #f0fdf4;
+}
+.jobStatusBox.bad {
+  border-color: #fecaca;
+  background: #fef2f2;
+}
+.jobStatusBox pre {
+  max-height: 240px;
+  overflow: auto;
+}
 .architecturePage {
   padding: 16px;
   height: 100vh;
@@ -458,6 +564,39 @@ textarea {
 .archCard h3 {
   margin: 0 0 8px;
   font-size: 15px;
+}
+.annotationBatchCard {
+  margin: 12px 0;
+}
+.batchGrid {
+  display: grid;
+  grid-template-columns: minmax(280px, 1.2fr) minmax(220px, 0.8fr) minmax(220px, 0.8fr);
+  gap: 12px;
+  align-items: start;
+}
+.reportHero {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  background: #ffffff;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 12px;
+  margin: 12px 0;
+}
+.reportHero h2 {
+  margin: 0 0 4px;
+}
+.reportPreview {
+  white-space: pre-wrap;
+  background: #0f172a;
+  color: #e5edf7;
+  border-radius: 8px;
+  padding: 14px;
+  overflow: auto;
+  line-height: 1.45;
+  font-size: 13px;
 }
 .archMeta {
   display: grid;
@@ -511,6 +650,86 @@ textarea {
 }
 .pipelineBuilderGrid .wide {
   min-width: 0;
+}
+.architecturePresets,
+.componentLibraryShell {
+  margin-top: 12px;
+}
+#architecturePresetGallery {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 10px;
+}
+.presetCard,
+.componentCard {
+  border: 1px solid #dbe3ed;
+  border-radius: 8px;
+  background: linear-gradient(180deg, #ffffff, #f8fafc);
+  padding: 10px;
+  min-width: 0;
+}
+.presetHeader,
+.componentTitle,
+.componentGroupHeader {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  align-items: flex-start;
+}
+.presetHeader h3,
+.componentGroupHeader h3,
+.componentTitle h4 {
+  margin: 0;
+  font-size: 13px;
+  color: #0f172a;
+}
+.presetCard p,
+.componentCard p,
+.qcPipelineStep p {
+  margin: 7px 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.35;
+}
+.componentGroup {
+  border-top: 1px solid #e2e8f0;
+  padding-top: 12px;
+  margin-top: 12px;
+}
+.componentGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(245px, 1fr));
+  gap: 10px;
+  margin-top: 8px;
+}
+.componentCard button {
+  margin-top: 8px;
+  width: 100%;
+}
+.miniChipRow {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  margin-top: 7px;
+}
+.miniChipRow span {
+  border: 1px solid #dbeafe;
+  background: #eff6ff;
+  color: #1d4ed8;
+  border-radius: 999px;
+  padding: 2px 7px;
+  font-size: 11px;
+  font-weight: 700;
+}
+.miniChipRow.qcChips span {
+  border-color: #dcfce7;
+  background: #f0fdf4;
+  color: #166534;
+}
+.miniChipRow.qcChips span:not(.available) {
+  border-color: #e2e8f0;
+  background: #f8fafc;
+  color: #64748b;
 }
 .stagePaletteGroup {
   display: grid;
@@ -832,6 +1051,110 @@ textarea {
   border-radius: 5px;
   background: #0b1220;
 }
+.qcWorkbench {
+  display: grid;
+  grid-template-columns: minmax(520px, 1.35fr) minmax(320px, 0.8fr);
+  gap: 12px;
+  margin: 12px 0;
+  align-items: start;
+}
+.qcViewerPanel,
+.qcPipelinePanel {
+  background: #ffffff;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 10px;
+  box-shadow: 0 8px 24px rgba(15, 23, 42, 0.07);
+}
+.qcFrameShell {
+  position: relative;
+  margin-top: 10px;
+  background: #08111f;
+  border: 1px solid #94a3b8;
+  border-radius: 8px;
+  overflow: auto;
+  min-height: 420px;
+  display: grid;
+  place-items: center;
+}
+#qcFrameImg {
+  width: min(100%, 980px);
+  height: auto;
+  display: block;
+}
+#qcEvidenceImg {
+  position: absolute;
+  width: min(100%, 980px);
+  height: auto;
+  inset: 50% auto auto 50%;
+  transform: translate(-50%, -50%);
+  mix-blend-mode: screen;
+  pointer-events: none;
+}
+#qcPipelineTimeline {
+  display: grid;
+  gap: 8px;
+  margin-top: 10px;
+}
+.qcPipelineStep {
+  display: grid;
+  grid-template-columns: 34px 1fr;
+  gap: 8px;
+  border: 1px solid #e2e8f0;
+  background: #f8fafc;
+  border-radius: 8px;
+  padding: 8px;
+}
+.qcStageGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 10px;
+  margin-top: 10px;
+}
+.qcStageGrid.compact {
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+}
+.qcStageGrid.large {
+  grid-template-columns: repeat(auto-fit, minmax(360px, 1fr));
+}
+.qcStageTile {
+  border: 1px solid #dbe3ed;
+  border-radius: 8px;
+  background: #ffffff;
+  padding: 9px;
+}
+.qcStageTile.missing {
+  background: #f8fafc;
+  border-style: dashed;
+}
+.qcStageFrame {
+  aspect-ratio: 421 / 259;
+  background: #08111f;
+  border: 1px solid #1e293b;
+  border-radius: 7px;
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+  margin-top: 8px;
+}
+.qcStageMedia {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  display: block;
+}
+.qcStageMissing {
+  color: #cbd5e1;
+  font-size: 12px;
+  text-align: center;
+  padding: 12px;
+}
+.qcStageTile p {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.35;
+  margin: 7px 0 0;
+}
 .qcWarnings {
   display: grid;
   gap: 8px;
@@ -845,6 +1168,23 @@ textarea {
   padding: 9px;
   font-size: 12px;
 }
+.activeRunCard,
+.activeRunRow {
+  outline: 2px solid #2563eb;
+  outline-offset: 2px;
+}
+.experimentBoard {
+  grid-column: 1 / -1;
+  overflow-x: auto;
+}
+.experimentBoard .buttonRow {
+  min-width: 360px;
+}
+.experimentBoard button.active {
+  background: #dbeafe;
+  border-color: #60a5fa;
+  color: #1e3a8a;
+}
 @media (max-width: 1180px) {
   .app { grid-template-columns: 1fr; height: auto; overflow: visible; }
   .stage { display: flex; overflow: visible; }
@@ -854,4 +1194,7 @@ textarea {
   .selectedRoiPanel { max-height: none; }
   .pipelineBuilderGrid,
   .pipelineBuilderGrid.bottom { grid-template-columns: 1fr; }
+  .qcWorkbench { grid-template-columns: 1fr; }
+  .qcFrameShell { min-height: 320px; }
+  .runGeneratePanel { grid-template-columns: 1fr; }
 }

@@ -38,18 +38,22 @@ final String datasetId = setting("dataset_id", "calcium_video_2")
 final Path outputRoot = resolvePath(projectRoot, setting("output_root", "Outputs"))
 final Path highPassDir = outputRoot.resolve("HighPass").resolve(datasetId)
 final Path outputDir = outputRoot.resolve("EventPreservingNoiseSuppression").resolve(datasetId)
-final int localWindow = 23
+final int localWindow = Integer.parseInt(setting("local_window_px", "23"))
 final int supportWindow = 3
 final int supportMinPixels = 2
-final double epsilon = 1.0d
+final double epsilon = Double.parseDouble(setting("epsilon", "1.0"))
 final double noiseFloorFractionOfMadSigma = 0.25d
 final double[] thresholds = [2.0d, 2.5d, 3.0d, 3.5d, 4.0d] as double[]
+final String requestedSigmaLabel = setting("sigma_label", "")
 
 final List<Map<String, String>> variants = [
     [label: "sigma04", file: "${datasetId}_hp_gaussian_sigma04f_float32.tif"],
     [label: "sigma06", file: "${datasetId}_hp_gaussian_sigma06f_float32.tif"],
     [label: "sigma08", file: "${datasetId}_hp_gaussian_sigma08f_float32.tif"],
 ]
+final List<Map<String, String>> activeVariants = requestedSigmaLabel.isBlank()
+    ? variants
+    : [[label: "sigma${requestedSigmaLabel}", file: "${datasetId}_hp_gaussian_sigma${requestedSigmaLabel}f_float32.tif"]]
 
 Files.createDirectories(outputDir)
 
@@ -198,7 +202,7 @@ stats << "variant\tframe\tmedian\tmad_sigma\tnoise_floor\tz_min\tz_max\tz_mean"
 thresholds.each { t -> stats << "\tmask_pixels_z${thresholdLabel(t)}" }
 stats << "\n"
 
-variants.each { variant ->
+activeVariants.each { variant ->
     String label = variant.label
     Path inPath = highPassDir.resolve(variant.file)
     if (!Files.exists(inPath)) {

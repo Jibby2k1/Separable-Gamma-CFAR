@@ -4,6 +4,7 @@ from __future__ import annotations
 from typing import Any, Mapping
 
 from neurobench.annotations import migrate_annotations_v3
+from neurobench.review_batches import build_annotation_batch, review_progress
 
 
 TRIAGE_CATEGORY_NAMES = (
@@ -182,4 +183,6 @@ def compute_annotation_summary(review_data: Mapping[str, Any], annotations: Mapp
             "candidate_rois_per_accepted_roi": len(rois) / max(1, roi_states["accepted"]),
             "candidate_events_per_accepted_event": len(events) / max(1, event_states["accepted"]),
         },
+        "review_progress": review_progress(review_data, ann),
+        "next_annotation_batch": build_annotation_batch(review_data, ann),
     }

@@ -19,6 +19,8 @@ Current summaries include:
 - triage category counts and queue IDs
 - candidates per accepted ROI
 - candidate events per accepted event
+- review progress toward the first tuning milestone
+- the recommended next annotation batch
 
 The same summary can be generated from files:
 
@@ -33,6 +35,26 @@ High candidate-per-accepted counts indicate that the detector is still too
 permissive or that the review queue needs better ranking. Low control-ready
 counts indicate that accepted neurons are not yet clean enough for downstream
 inverse-dynamics work.
+
+## Annotation-Driven Tuning Gate
+
+The current detector settings should not be tuned as if the candidate output
+were ground truth. The Metrics page now reports whether the session has reached
+the first practical tuning gate:
+
+- at least `20` reviewed ROIs
+- at least `20` reviewed events
+
+The threshold is intentionally modest. It is enough to make obvious parameter
+comparisons less blind, but it is not a final validation set. The recommended
+batch is also available from:
+
+```bash
+python3 tools/build_annotation_batch.py \
+  --review-data Outputs/NeuronReview/calcium_rest_cropped/app/review_data.json \
+  --annotations Outputs/NeuronReview/calcium_rest_cropped/app/annotations.json \
+  --out Outputs/NeuronReview/calcium_rest_cropped/annotation_batch.json
+```
 
 ## Triage Categories
 

@@ -39,24 +39,37 @@ final Path outputRoot = resolvePath(projectRoot, setting("output_root", "Outputs
 final Path highPassDir = outputRoot.resolve("HighPass").resolve(datasetId)
 final Path outputDir = outputRoot.resolve("CandidateEventPipeline").resolve(datasetId)
 
-final double localRadius = 11.0d
+final double localRadius = Double.parseDouble(setting("local_radius_px", "11.0"))
 final double madScale = 1.4826d
-final double epsilon = 1.0d
-final int maxArea = 300
-final double minFillFraction = 0.10d
-final double maxAspectRatio = 6.0d
+final double epsilon = Double.parseDouble(setting("epsilon", "1.0"))
+final int maxArea = Integer.parseInt(setting("component_max_area_px", "300"))
+final double minFillFraction = Double.parseDouble(setting("component_min_fill_fraction", "0.10"))
+final double maxAspectRatio = Double.parseDouble(setting("component_max_aspect_ratio", "6.0"))
+final String requestedSigmaLabel = setting("sigma_label", "")
+final String requestedPresetName = setting("component_preset_name", "")
 
 final List<Map<String, String>> variants = [
     [label: "sigma04", file: "${datasetId}_hp_gaussian_sigma04f_float32.tif"],
     [label: "sigma06", file: "${datasetId}_hp_gaussian_sigma06f_float32.tif"],
     [label: "sigma08", file: "${datasetId}_hp_gaussian_sigma08f_float32.tif"],
 ]
+final List<Map<String, String>> activeVariants = requestedSigmaLabel.isBlank()
+    ? variants
+    : [[label: "sigma${requestedSigmaLabel}", file: "${datasetId}_hp_gaussian_sigma${requestedSigmaLabel}f_float32.tif"]]
 
 final List<Map<String, Object>> presets = [
     [name: "permissive", seed: 1.4d, grow: 0.7d, minArea: 3],
     [name: "balanced", seed: 1.7d, grow: 0.9d, minArea: 3],
     [name: "strict", seed: 2.0d, grow: 1.1d, minArea: 4],
 ]
+final List<Map<String, Object>> activePresets = requestedPresetName.isBlank()
+    ? presets
+    : [[
+        name: requestedPresetName,
+        seed: Double.parseDouble(setting("component_seed_z", "2.0")),
+        grow: Double.parseDouble(setting("component_grow_z", "1.1")),
+        minArea: Integer.parseInt(setting("component_min_area_px", "4"))
+    ]]
 
 Files.createDirectories(outputDir)
 
@@ -245,7 +258,7 @@ params << "component_connectivity=8\n"
 params << "component_max_area=${maxArea}\n"
 params << "component_min_fill_fraction=${minFillFraction}\n"
 params << "component_max_aspect_ratio=${maxAspectRatio}\n"
-presets.each { p ->
+activePresets.each { p ->
     params << "preset=${p.name},seed_z=${p.seed},grow_z=${p.grow},min_area=${p.minArea}\n"
 }
 
@@ -257,7 +270,7 @@ frameStats << "variant\tpreset\tframe\taccepted_components\taccepted_pixels\trej
 
 RankFilters rankFilters = new RankFilters()
 
-variants.each { variant ->
+activeVariants.each { variant ->
     String variantLabel = variant.label
     Path inPath = highPassDir.resolve(variant.file)
     if (!Files.exists(inPath)) {
@@ -276,7 +289,7 @@ variants.each { variant ->
     ImageStack zStack = new ImageStack(width, height)
     Map<String, ImageStack> maskStacks = new LinkedHashMap<>()
     Map<String, ImageStack> labelStacks = new LinkedHashMap<>()
-    presets.each { p ->
+    activePresets.each { p ->
         String tag = presetTag(p)
         maskStacks[tag] = new ImageStack(width, height)
         labelStacks[tag] = new ImageStack(width, height)
@@ -311,7 +324,7 @@ variants.each { variant ->
         }
         zStack.addSlice("frame_${s}", new FloatProcessor(width, height, z))
 
-        presets.each { preset ->
+        activePresets.each { preset ->
             String tag = presetTag(preset)
             Map<String, Object> result = componentFilter(
                 z,
@@ -360,7 +373,7 @@ variants.each { variant ->
     new FileSaver(zImp).saveAsTiffStack(outputDir.resolve("${datasetId}_${variantLabel}_robust_positive_z_float32.tif").toString())
     zImp.close()
 
-    presets.each { preset ->
+    activePresets.each { preset ->
         String tag = presetTag(preset)
         ImagePlus maskImp = new ImagePlus("${datasetId}_${variantLabel}_${tag}_mask", maskStacks[tag])
         new FileSaver(maskImp).saveAsTiffStack(outputDir.resolve("${datasetId}_${variantLabel}_${tag}_mask.tif").toString())

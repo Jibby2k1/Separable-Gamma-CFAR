@@ -579,6 +579,8 @@ let playing = false;
 let timer = null;
 let saveTimer = null;
 let serverBacked = location.protocol.startsWith('http');
+const ownerTokenKey = `${storeKey}-owner-token`;
+let generationOwnerToken = localStorage.getItem(ownerTokenKey) || '';
 let annotations = defaultAnnotations();
 
 function defaultAnnotations() {
@@ -1689,7 +1691,7 @@ function renderDatasetQc(){
 }
 
 function routePage(){
-  const page = location.hash === '#architecture' ? 'architecture' : location.hash === '#metrics' ? 'metrics' : location.hash === '#qc' ? 'qc' : 'review';
+  const page = location.hash === '#architecture' ? 'architecture' : location.hash === '#metrics' ? 'metrics' : (location.hash === '#process' || location.hash === '#qc') ? 'qc' : 'review';
   for(const id of ['reviewTab','reviewTabArch','reviewTabMetrics','reviewTabQc']) document.getElementById(id)?.classList.toggle('active', page === 'review');
   for(const id of ['architectureTab','architectureTabArch','architectureTabMetrics','architectureTabQc']) document.getElementById(id)?.classList.toggle('active', page === 'architecture');
   for(const id of ['metricsTab','metricsTabArch','metricsTabMetrics','metricsTabQc']) document.getElementById(id)?.classList.toggle('active', page === 'metrics');
@@ -1746,10 +1748,29 @@ HTML_TEMPLATE = """<!doctype html>
         <a id="reviewTab" href="#review">Review</a>
         <a id="architectureTab" href="#architecture">Architecture Lab</a>
         <a id="metricsTab" href="#metrics">Metrics</a>
-        <a id="qcTab" href="#qc">Dataset QC</a>
+        <a id="qcTab" href="#process">Process Lab</a>
+        <a id="reportTab" href="#report">Report</a>
       </nav>
       <span id="saveState" class="saveState">loading</span>
     </div>
+    <div class="toolbar runSyncBar">
+      <label>Review run <select id="activeRunSelect"></select></label>
+      <span id="activeRunStatus" class="runSyncStatus">loading run status</span>
+      <label>Backend
+        <select id="generationBackend">
+          <option value="auto">Auto</option>
+          <option value="fiji_groovy">Fiji/Groovy</option>
+          <option value="python_gpu">Python GPU</option>
+        </select>
+      </label>
+      <button id="loadRunReviewBtn">Load Review</button>
+      <button id="openRunViewBtn">Open View</button>
+      <button id="previewRunViewBtn">Generate Preview</button>
+      <button id="generateRunViewBtn">Generate View</button>
+      <button id="unlockGenerationBtn">Unlock Generation</button>
+      <button id="refreshRunBtn">Refresh</button>
+    </div>
+    <div id="runGeneratePanel" class="runGeneratePanel hidden"></div>
     <div class="toolbar">
       <button id="playBtn">Play</button>
       <button id="fitBtn">Fit Width</button>
@@ -1829,6 +1850,13 @@ HTML_TEMPLATE = """<!doctype html>
       </div>
     </details>
     <h2>ROI Review</h2>
+    <section class="guidedPanelShell">
+      <div class="topbar">
+        <h2>Guided Review</h2>
+        <button id="reviewModeToggle">Explore / Guided</button>
+      </div>
+      <div id="guidedPanel"></div>
+    </section>
     <div class="buttonRow">
       <button id="acceptBtn" class="accept">Accept</button>
       <button id="rejectBtn" class="reject">Reject</button>
@@ -1948,6 +1976,7 @@ HTML_TEMPLATE = """<!doctype html>
     <div class="toolbar">
       <select id="queueSelect">
         <option value="unlabeled">Unlabeled first</option>
+        <option value="annotationBatch">Next annotation batch</option>
         <option value="priority">Priority score</option>
         <option value="strongNeuron">Strong neuron candidates</option>
         <option value="needsEventReview">Event review needed</option>
@@ -1996,7 +2025,8 @@ HTML_TEMPLATE = """<!doctype html>
         <a id="reviewTabArch" href="#review">Review</a>
         <a id="architectureTabArch" href="#architecture">Architecture Lab</a>
         <a id="metricsTabArch" href="#metrics">Metrics</a>
-        <a id="qcTabArch" href="#qc">Dataset QC</a>
+        <a id="qcTabArch" href="#process">Process Lab</a>
+        <a id="reportTabArch" href="#report">Report</a>
       </nav>
     </div>
     <p class="hint">This page compares standardized architecture-run artifacts and builds planned pipeline manifests. Build mode configures and exports plans; it does not execute Fiji or Python pipelines in the browser.</p>
@@ -2015,6 +2045,10 @@ HTML_TEMPLATE = """<!doctype html>
         <label>Preset
           <select id="pipelinePresetSelect">
             <option value="current_review_pipeline">Current-style local-z pipeline</option>
+            <option value="adaptive_cfar">Adaptive CFAR detector</option>
+            <option value="artifact_suppression">Artifact suppression pass</option>
+            <option value="high_recall_discovery">High-recall discovery</option>
+            <option value="motion_aware">Motion-aware QC</option>
             <option value="pmd_import">PMD denoised local-z</option>
             <option value="suite2p_import">Suite2p import</option>
             <option value="oasis_import">OASIS event model</option>
@@ -2039,6 +2073,14 @@ HTML_TEMPLATE = """<!doctype html>
           <div id="pipelineInspector"></div>
         </section>
       </div>
+      <section class="archCard architecturePresets">
+        <h2>Recommended Architectures</h2>
+        <div id="architecturePresetGallery"></div>
+      </section>
+      <section class="archCard componentLibraryShell">
+        <h2>Component Library</h2>
+        <div id="componentLibrary"></div>
+      </section>
       <div class="pipelineBuilderGrid bottom">
         <section class="archCard">
           <h2>Validation</h2>
@@ -2060,7 +2102,8 @@ HTML_TEMPLATE = """<!doctype html>
         <a id="reviewTabMetrics" href="#review">Review</a>
         <a id="architectureTabMetrics" href="#architecture">Architecture Lab</a>
         <a id="metricsTabMetrics" href="#metrics">Metrics</a>
-        <a id="qcTabMetrics" href="#qc">Dataset QC</a>
+        <a id="qcTabMetrics" href="#process">Process Lab</a>
+        <a id="reportTabMetrics" href="#report">Report</a>
       </nav>
     </div>
     <p class="hint">This page summarizes the current annotation state from the live autosave data. It is useful for tracking review progress, burden, accepted events, control-ready ROIs, and discovery outcomes.</p>
@@ -2068,16 +2111,30 @@ HTML_TEMPLATE = """<!doctype html>
   </section>
   <section id="qcPage" class="architecturePage hidden">
     <div class="topbar">
-      <h1>Dataset QC: {dataset_id}</h1>
+      <h1>Process Lab: {dataset_id}</h1>
       <nav class="navTabs">
         <a id="reviewTabQc" href="#review">Review</a>
         <a id="architectureTabQc" href="#architecture">Architecture Lab</a>
         <a id="metricsTabQc" href="#metrics">Metrics</a>
-        <a id="qcTabQc" href="#qc">Dataset QC</a>
+        <a id="qcTabQc" href="#process">Process Lab</a>
+        <a id="reportTabQc" href="#report">Report</a>
       </nav>
     </div>
-    <p class="hint">This page audits the video and candidate set using lightweight fields already present in review data. Use it to spot small ROI fragments, high discovery burden, trace-noise issues, and suspicious evidence maps.</p>
+    <p class="hint">This page inspects the active architecture run in pipeline order, including raw frames, generated intermediates, artifact states, and lightweight process warnings.</p>
     <div id="datasetQc"></div>
+  </section>
+  <section id="reportPage" class="architecturePage hidden">
+    <div class="topbar">
+      <h1>Review Report: {dataset_id}</h1>
+      <nav class="navTabs">
+        <a id="reviewTabReport" href="#review">Review</a>
+        <a id="architectureTabReport" href="#architecture">Architecture Lab</a>
+        <a id="metricsTabReport" href="#metrics">Metrics</a>
+        <a id="qcTabReport" href="#process">Process Lab</a>
+        <a id="reportTabReport" href="#report">Report</a>
+      </nav>
+    </div>
+    <div id="reportPageBody"></div>
   </section>
 </div>
 <script id="review-data" type="application/json">{data_json}</script>
@@ -2102,6 +2159,7 @@ def architecture_runs_from_review(data: dict, review_data_path: Path, dataset_id
                     {"name": "trace_event_scoring", "params": {"event_threshold_z": data.get("parameters", {}).get("eventZThreshold")}},
                 ],
                 "parameters": data.get("parameters", {}),
+                "execution": {"status": "completed"},
                 "summary": {
                     "roi_count": len(data.get("rois", [])),
                     "event_count": sum(len(roi.get("events", [])) for roi in data.get("rois", [])),
@@ -2110,7 +2168,9 @@ def architecture_runs_from_review(data: dict, review_data_path: Path, dataset_id
                 },
                 "artifacts": {
                     "review_data": str(review_data_path),
+                    "app_url": "index.html",
                     "frames": str(review_data_path.parent / "frames"),
+                    "intermediates": [],
                     "evidence_maps": data.get("discovery", {}).get("evidenceMaps", []),
                     "roi_summary_tsv": str(review_data_path.parent / "roi_summary.tsv"),
                     "discovery_suggestions_tsv": str(review_data_path.parent / "discovery_suggestions.tsv"),

@@ -44,19 +44,19 @@ final Path outputDir = resolvePath(projectRoot, setting("app_dir", outputRoot.re
 final Path frameDir = outputDir.resolve("frames")
 final Path evidenceDir = outputDir.resolve("evidence")
 
-final int minRoiArea = 8
-final int maxRoiArea = 260
-final int maxRois = 90
+final int minRoiArea = Integer.parseInt(setting("component_min_area_px", "8"))
+final int maxRoiArea = Integer.parseInt(setting("component_max_area_px", "260"))
+final int maxRois = Integer.parseInt(setting("max_rois", "90"))
 final int nonMaxRadius = 4
 final int minPeakDistance = 9
 final int footprintRadius = 9
-final int backgroundOuterRadius = 15
+final int backgroundOuterRadius = Integer.parseInt(setting("background_outer_radius_px", "15"))
 final double zActiveThreshold = 2.0d
-final double eventZThreshold = 2.4d
-final double neuropilWeight = 0.7d
-final double kalmanGain = 0.060d
-final double kalmanSpikeGain = 0.008d
-final double kalmanNegativeGain = 0.110d
+final double eventZThreshold = Double.parseDouble(setting("event_threshold_z", "2.4"))
+final double neuropilWeight = Double.parseDouble(setting("neuropil_weight", "0.7"))
+final double kalmanGain = Double.parseDouble(setting("kalman_gain", "0.060"))
+final double kalmanSpikeGain = Double.parseDouble(setting("spike_gain", "0.008"))
+final double kalmanNegativeGain = Double.parseDouble(setting("kalman_negative_gain", "0.110"))
 
 Files.createDirectories(frameDir)
 Files.createDirectories(evidenceDir)

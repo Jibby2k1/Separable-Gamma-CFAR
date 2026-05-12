@@ -72,10 +72,17 @@ class PipelineCatalogTests(unittest.TestCase):
         catalog = catalog_as_dict()
 
         self.assertIn("adaptive_gamma_cfar", catalog)
+        self.assertIn("artifact_classifier_v1", catalog)
+        self.assertEqual(catalog["artifact_classifier_v1"]["availability"], "planned")
+        self.assertEqual(catalog["adaptive_gamma_cfar"]["ui_group"], "detection")
+        self.assertIn("adaptive_threshold_trace", catalog["adaptive_gamma_cfar"]["expected_qc_outputs"])
         for stage_id, stage in catalog.items():
             with self.subTest(stage_id=stage_id):
                 self.assertTrue(stage["description"])
                 self.assertTrue(stage["why_use_it"])
+                self.assertIn(stage["availability"], {"implemented", "planned", "external_import"})
+                self.assertTrue(stage["ui_group"])
+                self.assertIsInstance(stage["expected_qc_outputs"], tuple)
                 self.assertIn(stage["real_time_profile"]["mode"], {"streaming", "batch", "offline", "unknown"})
                 self.assertIn("closed_loop_candidate", stage["real_time_profile"])
                 for name, doc in stage["parameter_docs"].items():

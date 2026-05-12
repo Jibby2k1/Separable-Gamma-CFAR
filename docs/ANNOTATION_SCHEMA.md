@@ -59,6 +59,15 @@ unsure -> unsure
 Use `tools/export_annotations.py` to write a migrated `annotations_v3.json` plus
 ROI and event TSV files.
 
+## Run-Scoped Labels
+
+The workbench preserves legacy top-level `rois`, `events`, `suggestions`,
+`promotedRois`, and `virtualRois` as the active working copy. It also mirrors
+those maps under `runs[run_id]` so labels from one architecture run are not
+mixed into another run with different ROI IDs or event calls. Older
+single-run `annotations.json` files are migrated into the baseline run when the
+dashboard opens.
+
 ## Review Stats
 
 The browser records lightweight review-session metadata in `reviewStats`:

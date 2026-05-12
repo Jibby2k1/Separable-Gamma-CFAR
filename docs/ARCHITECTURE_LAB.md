@@ -24,6 +24,30 @@ Architecture Lab has two related modes:
 - Build mode captures a planned run configuration that can be exported as a
   manifest for command-line execution or later attachment.
 
+Build mode now has three practical surfaces:
+
+- the pipeline stack, where stages are ordered and parameterized
+- recommended architecture cards, which load common baseline, adaptive CFAR,
+  artifact-suppression, high-recall, motion-aware, PMD, Suite2p, and OASIS
+  plans
+- a component library grouped by import, preprocessing, filtering, artifact,
+  ROI, trace, event, ensemble, and ranking roles
+
+Each component card shows what the stage does, why it exists, whether it is
+implemented/planned/external, its input/output artifact contract, its tunable
+parameters, real-time badges, and the QC outputs the Process Lab page should be
+able to inspect.
+
+Architecture Lab, Review, and Process Lab now share an active run selection.
+Selecting a completed/generated run can load that run's `review_data.json` when
+the file is reachable from the local workbench server. Selecting a planned run
+does not change the Review video or pretend outputs exist. When the dashboard
+is served locally, Generate View starts a whitelisted local job that runs the
+selected Architecture Lab run, updates `architecture_runs.json`, and refreshes
+Review/Process Lab when outputs are ready. Generated runs are isolated under
+`app/generated_runs/<run_id>/` so a parameter test does not overwrite the
+baseline dashboard.
+
 Build mode is intentionally not a browser execution engine. In v1, the
 workbench can configure, save, and export planned pipeline metadata, but it does
 not run Fiji/Groovy, Python, Suite2p, CaImAn, PMD, OASIS, denoising models, or
@@ -61,6 +85,13 @@ browser:
 - parameters and preset names that affect ROI/event generation
 - expected output locations for `review_data.json`, evidence maps, traces, and
   architecture-run manifests
+- optional `artifacts.proposal_analysis`,
+  `artifacts.artifact_classifier_tsv`, and
+  `artifacts.missed_neuron_proposals_tsv` entries for generated Process Lab
+  triage
+- optional `artifacts.intermediates[]` entries for browser-readable stage
+  outputs, preferably PNG frame patterns such as
+  `intermediates/<run_id>/<stage_id>/frame_%03d.png`
 - status such as `planned`, `exported`, `running`, `completed`, or `failed`
 - provenance notes, including who configured the plan and when it was exported
 
@@ -68,6 +99,19 @@ Completed run manifests remain the comparison source of truth. A planned
 manifest should not be counted as a completed Architecture Lab run until the
 external pipeline has produced artifacts and an architecture-run manifest is
 attached.
+
+The browser-side Generate View workflow is intentionally constrained. It calls
+local server endpoints for predefined project jobs only; it never sends
+arbitrary shell commands. The default backend uses the proven Fiji/Groovy
+pipeline. A Python GPU backend can be selected explicitly, and the dashboard
+reports Torch/CUDA readiness before attempting it.
+
+Run-aware generation currently bridges the implemented Fiji/Groovy parameters
+that affect the standard review outputs: temporal high-pass sigma, robust
+local-z radius/epsilon, connected-component seed/grow/min/max area, local
+background ring radius/weight, and Kalman/event thresholds. Planned or external
+stages that do not yet have an executor remain metadata/QC expectations until a
+worker is added for them.
 
 ## Parameter Sweeps
 
@@ -87,12 +131,46 @@ Recommended first sweeps are narrow and interpretable:
 Use the exported planned manifest as a run sheet for Fiji/Python execution, then
 merge completed runs back into Architecture Lab for comparison.
 
+In the dashboard, saving a sweep expands it into separate planned run IDs.
+Generate those run IDs from the Review run selector to produce side-by-side
+Review and Process Lab artifacts for each combination.
+
+The Compare view includes a Parameter Experiments table for these generated
+runs. It shows ROI/event/suggestion counts, annotation-derived burden when
+available, artifact-like queue counts, missed-neuron candidate counts, run
+status, and a lightweight reviewer label. Selecting Run A makes that run the
+global active run used by Review and Process Lab.
+
+For a standard review-pack starting point, generate grouped planned runs:
+
+```bash
+python3 tools/build_sweep_pack.py \
+  --dataset-id calcium_rest_cropped \
+  --out Outputs/ArchitectureRuns/calcium_rest_cropped/review_pack_v1.json
+```
+
+The pack includes permissive, balanced, strict, artifact-suppression, and
+high-recall planned runs. These are review plans, not completed detector
+outputs. Use them to decide which variants to execute and then compare completed
+runs for candidate stability and artifact burden.
+
 ## Stage Explanations And 100 Hz Readiness
 
 Build mode reads the shared `neurobench.pipeline_catalog` metadata. Each stage
 should include a plain-language description, why it is useful, parameter
 explanations, and real-time metadata. The dashboard surfaces this directly in
 the stack so parameter choices are not just raw names and numbers.
+
+The current component catalog includes implemented stages for source/review
+import, temporal high-pass filtering, event-preserving denoising, spatial
+Gaussian smoothing, rigid drift estimation, robust local-z scoring, Gamma CFAR,
+adaptive EWMA/Gamma CFAR, component filtering, local background correction,
+trace event scoring, Kalman positive-innovation scoring, heuristic ranking, and
+external Suite2p/PMD/OASIS imports. Planned components cover flat-field and
+photobleach correction, Hampel impulse rejection, trace Kalman smoothing,
+local-correlation and event-triggered footprint evidence, background/artifact
+maps, soma-scale blob candidates, split/merge suggestions, ensemble/stability
+scoring, artifact classification, and active-learning review ranking.
 
 For upcoming 100 Hz samples, use the real-time badges as planning warnings:
 
@@ -135,12 +213,23 @@ Architecture Lab v1 shows:
 - dataset ID
 - ROI, event, suggestion, and frame counts
 - review-data and ROI-summary artifact paths
+- proposal-analysis, artifact-classifier, and missed-neuron proposal artifact
+  paths when present
 - evidence-map labels
 - paired run comparison for candidate counts, accepted/rejected counts,
   control-ready counts, and review burden when two or more runs are available
+- Build-mode component descriptions, parameter explanations, availability
+  status, real-time badges, expected QC outputs, and one-click recommended
+  architecture presets
 
-The page is intentionally lightweight for now. Side-by-side frame overlays can
-be added once multiple real runs exist.
+Process Lab is tied to the selected architecture run. That page shows the
+ordered pipeline context beside frame/evidence navigation so QC warnings can be
+interpreted against the exact stack that produced or is expected to produce the
+candidate set.
+
+When generated intermediate outputs are attached, Process Lab displays them as a
+synchronized stage grid driven by a single frame slider. Missing stage outputs
+are shown as placeholders so it is obvious what still needs to be exported.
 
 The companion Metrics/Audit page is available at `#metrics` and summarizes the
 current annotation burden and review progress.

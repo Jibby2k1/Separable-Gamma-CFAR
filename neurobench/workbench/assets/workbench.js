@@ -1,5 +1,5 @@
 const embedded = document.getElementById('review-data');
-const data = JSON.parse(embedded.textContent);
+let data = JSON.parse(embedded.textContent);
 const appRoot = document.getElementById('appRoot');
 const img = document.getElementById('frameImg');
 const evidenceImg = document.getElementById('evidenceImg');
@@ -29,9 +29,19 @@ let selectedEventFrame = null;
 let selectedSuggestionId = data.discovery?.suggestions?.[0]?.id || null;
 let playing = false;
 let timer = null;
+let qcTimer = null;
 let saveTimer = null;
 let serverBacked = location.protocol.startsWith('http');
+const ownerTokenKey = `${storeKey}-owner-token`;
+let generationOwnerToken = localStorage.getItem(ownerTokenKey) || '';
 let annotations = defaultAnnotations();
+let generationEnvironment = null;
+let currentGenerationJob = null;
+let generationPollTimer = null;
+const proposalAnalysisCache = new Map();
+
+function architectureRuns(){ return data.architectureRuns?.runs || []; }
+function baselineRunId(){ return architectureRuns()[0]?.run_id || 'current_review_pipeline'; }
 
 function defaultAnnotations() {
   return {
@@ -43,6 +53,7 @@ function defaultAnnotations() {
     suggestions: {},
     promotedRois: {},
     virtualRois: {},
+    runs: {},
     reviewStats: {
       sessionStartedAt: new Date().toISOString(),
       lastActionAt: null,
@@ -62,7 +73,16 @@ function defaultAnnotations() {
       showEvidence: false,
       showSuggestions: true,
       minArea: 0,
-      minEvents: 0
+      minEvents: 0,
+      reviewMode: 'explore',
+      guidedTaskIndex: 0,
+      targetRois: 30,
+      targetEvents: 30,
+      targetSuggestions: 15,
+      activeRunId: baselineRunId(),
+      qcRunId: data.architectureRuns?.runs?.[0]?.run_id || '',
+      experimentLabels: {},
+      qcEvidenceMap: data.discovery?.evidenceMaps?.[0]?.id || ''
     }
   };
 }
@@ -78,9 +98,24 @@ function mergeAnnotations(incoming) {
   annotations.suggestions = Object.assign({}, incoming?.suggestions || {});
   annotations.promotedRois = Object.assign({}, incoming?.promotedRois || {});
   annotations.virtualRois = Object.assign({}, incoming?.virtualRois || {});
+  annotations.runs = {};
+  for(const [runId, bucket] of Object.entries(incoming?.runs || {})) annotations.runs[runId] = migrateRunBucket(bucket);
   annotations.reviewStats = Object.assign(defaultAnnotations().reviewStats, incoming?.reviewStats || {});
   annotations.reviewStats.actions = Object.assign({}, incoming?.reviewStats?.actions || {});
   annotations.settings = Object.assign(defaultAnnotations().settings, incoming?.settings || {});
+}
+
+function migrateRunBucket(bucket) {
+  const out = {
+    rois: {},
+    events: {},
+    suggestions: Object.assign({}, bucket?.suggestions || {}),
+    promotedRois: Object.assign({}, bucket?.promotedRois || {}),
+    virtualRois: Object.assign({}, bucket?.virtualRois || {})
+  };
+  for(const [id, ann] of Object.entries(bucket?.rois || {})) out.rois[id] = migrateRoiAnn(ann);
+  for(const [id, ann] of Object.entries(bucket?.events || {})) out.events[id] = migrateEventAnn(ann);
+  return out;
 }
 
 function migrateRoiAnn(ann) {
@@ -104,6 +139,37 @@ function migrateEventAnn(ann) {
   return out;
 }
 
+function activeRunId(){ return setting('activeRunId') || baselineRunId(); }
+function activeRun(){ return architectureRuns().find(r => r.run_id === activeRunId()) || architectureRuns()[0] || null; }
+function runAnnotationSnapshot(){
+  return {
+    rois: Object.assign({}, annotations.rois || {}),
+    events: Object.assign({}, annotations.events || {}),
+    suggestions: Object.assign({}, annotations.suggestions || {}),
+    promotedRois: Object.assign({}, annotations.promotedRois || {}),
+    virtualRois: Object.assign({}, annotations.virtualRois || {})
+  };
+}
+function captureActiveRunAnnotations(){
+  annotations.runs = annotations.runs || {};
+  annotations.runs[activeRunId()] = migrateRunBucket(runAnnotationSnapshot());
+}
+function materializeRunAnnotations(runId){
+  annotations.runs = annotations.runs || {};
+  const hasLegacy = Object.keys(annotations.rois || {}).length || Object.keys(annotations.events || {}).length || Object.keys(annotations.suggestions || {}).length || Object.keys(annotations.promotedRois || {}).length;
+  if(!annotations.runs[runId] && hasLegacy && runId === baselineRunId()) annotations.runs[runId] = migrateRunBucket(runAnnotationSnapshot());
+  const bucket = annotations.runs[runId] || {rois:{}, events:{}, suggestions:{}, promotedRois:{}, virtualRois:{}};
+  annotations.rois = Object.assign({}, bucket.rois || {});
+  annotations.events = Object.assign({}, bucket.events || {});
+  annotations.suggestions = Object.assign({}, bucket.suggestions || {});
+  annotations.promotedRois = Object.assign({}, bucket.promotedRois || {});
+  annotations.virtualRois = Object.assign({}, bucket.virtualRois || {});
+}
+function ensureRunAnnotationScope(){
+  if(!setting('activeRunId')) annotations.settings.activeRunId = baselineRunId();
+  materializeRunAnnotations(activeRunId());
+}
+
 async function loadAnnotations() {
   const local = localStorage.getItem(storeKey);
   if (local) mergeAnnotations(JSON.parse(local));
@@ -120,6 +186,7 @@ async function loadAnnotations() {
   } else {
     setSaveState('static mode: export to save files', '');
   }
+  ensureRunAnnotationScope();
   applySettingsToControls();
 }
 
@@ -129,6 +196,7 @@ function setSaveState(text, cls) {
 }
 
 function saveAnnotationsNow() {
+  captureActiveRunAnnotations();
   annotations.updatedAt = new Date().toISOString();
   localStorage.setItem(storeKey, JSON.stringify(annotations));
   if (!serverBacked) {
@@ -172,6 +240,139 @@ function kalmanGain(){ return Number(setting('kalmanGain')); }
 function spikeGain(){ return Number(setting('spikeGain')); }
 function minAreaFilter(){ return Number(setting('minArea')); }
 function minEventsFilter(){ return Number(setting('minEvents')); }
+function targetCounts(){
+  return {
+    rois: Number(setting('targetRois')) || 30,
+    events: Number(setting('targetEvents')) || 30,
+    suggestions: Number(setting('targetSuggestions')) || 15
+  };
+}
+
+function runById(runId){ return architectureRuns().find(r => r.run_id === runId) || null; }
+function runGenerated(run){ return Boolean(run?.artifacts?.review_data) && run?.execution?.status !== 'planned'; }
+function runAppUrl(run){ return run?.artifacts?.app_url || run?.artifacts?.app || ''; }
+function artifactUrl(path){
+  if(!path) return '';
+  const value = String(path);
+  if(/^https?:\/\//.test(value)) return value;
+  const match = value.match(/Outputs\/NeuronReview\/([^/]+)\/app\/(.+)$/);
+  if(match){
+    const dataset = match[1], rest = match[2];
+    const currentDataset = data.dataset?.dataset_id || datasetId;
+    if(dataset === currentDataset) return rest;
+    return location.pathname.includes('/app/') ? `../../${dataset}/app/${rest}` : '';
+  }
+  if(!value.startsWith('/')) return value;
+  const generated = value.match(/generated_runs\/(.+)$/);
+  if(generated) return `generated_runs/${generated[1]}`;
+  const evidence = value.match(/evidence\/(.+)$/);
+  if(evidence) return `evidence/${evidence[1]}`;
+  const frames = value.match(/frames\/(.+)$/);
+  if(frames) return `frames/${frames[1]}`;
+  return value.startsWith('/') ? '' : value;
+}
+function framePatternPath(pattern, frame){
+  if(!pattern) return '';
+  const frameText = String(frame).padStart(3, '0');
+  return artifactUrl(String(pattern).replace('%03d', frameText).replace('{frame}', String(frame)).replace('{frame03}', frameText));
+}
+function rebaseRelativeAsset(value, base){
+  if(!value || !base) return value;
+  const text = String(value);
+  if(/^https?:\/\//.test(text) || text.startsWith('../') || text.startsWith(base)) return text;
+  if(text.includes('Outputs/NeuronReview/')) return artifactUrl(text);
+  if(text.startsWith('/')) return text;
+  return `${base.replace(/\/$/, '')}/${text}`;
+}
+function rebaseReviewDataAssets(reviewData, reviewUrl){
+  const slash = String(reviewUrl || '').lastIndexOf('/');
+  const base = slash >= 0 ? String(reviewUrl).slice(0, slash) : '';
+  if(!base) return reviewData;
+  if(reviewData.video?.framePattern) reviewData.video.framePattern = rebaseRelativeAsset(reviewData.video.framePattern, base);
+  for(const map of reviewData.discovery?.evidenceMaps || []){
+    if(map.file) map.file = rebaseRelativeAsset(map.file, base);
+    if(map.path) map.path = rebaseRelativeAsset(map.path, base);
+  }
+  return reviewData;
+}
+function generationCommandForRun(run){
+  const manifestPath = data.dataset?.paths?.dataset_manifest || data.dataset?.manifest || `Outputs/Manifests/${datasetId}.json`;
+  const outPath = `Outputs/ArchitectureRuns/${datasetId}/${run?.run_id || 'planned_run'}.json`;
+  return [
+    `python3 tools/build_pipeline_run.py --spec planned_architecture_run.json --out ${outPath}`,
+    `python3 tools/run_neuron_review_pipeline.py --dataset-manifest ${manifestPath} --architecture-runs ${data.dataset?.paths?.architecture_runs || 'Outputs/NeuronReview/' + datasetId + '/app/architecture_runs.json'} --run-id ${run?.run_id || 'planned_run'} --stages all`
+  ].join('\n');
+}
+function runStatusLabel(run){
+  if(!run) return 'no run selected';
+  if(runGenerated(run)) return 'generated review view available';
+  if(runAppUrl(run)) return 'generated app link available';
+  if(run.execution?.status === 'planned') return 'planned, not generated yet';
+  return 'metadata only';
+}
+function apiUrl(path){ return `api/${path.replace(/^\/+/, '')}`; }
+function generationHeaders(){
+  const headers = {'Content-Type':'application/json'};
+  if(generationOwnerToken) headers['X-Neurobench-Owner-Token'] = generationOwnerToken;
+  return headers;
+}
+async function fetchJson(url, options={}){
+  const res = await fetch(url, Object.assign({cache:'no-store'}, options));
+  const text = await res.text();
+  let payload = {};
+  try { payload = text ? JSON.parse(text) : {}; } catch (_) { payload = {error:text}; }
+  if(!res.ok) {
+    const err = new Error(payload.error || res.statusText);
+    err.payload = payload;
+    throw err;
+  }
+  return payload;
+}
+function proposalAnalysisUrl(run){
+  return artifactUrl(run?.artifacts?.proposal_analysis || '');
+}
+function proposalAnalysisForRun(run){
+  const url = proposalAnalysisUrl(run);
+  if(!url) return null;
+  const cached = proposalAnalysisCache.get(url);
+  if(cached?.status === 'ready') return cached.data;
+  if(cached?.status === 'error') return cached;
+  if(!cached){
+    proposalAnalysisCache.set(url, {status:'loading'});
+    fetchJson(url).then(payload => {
+      proposalAnalysisCache.set(url, {status:'ready', data:payload});
+      const hash = (location.hash || '#review').replace(/^#\/?/, '');
+      if(['process','process-lab','qc','dataset-qc'].includes(hash)) renderDatasetQc();
+    }).catch(err => {
+      proposalAnalysisCache.set(url, {status:'error', error:err.message || 'proposal analysis did not load'});
+      const hash = (location.hash || '#review').replace(/^#\/?/, '');
+      if(['process','process-lab','qc','dataset-qc'].includes(hash)) renderDatasetQc();
+    });
+  }
+  return {status:'loading'};
+}
+async function loadGenerationEnvironment(){
+  if(!serverBacked) return null;
+  try {
+    generationEnvironment = await fetchJson(apiUrl('environment'));
+  } catch (_) {
+    generationEnvironment = null;
+  }
+  renderRunSyncControls();
+  return generationEnvironment;
+}
+function backendReadiness(){
+  const backend = document.getElementById('generationBackend')?.value || 'auto';
+  if(!serverBacked) return {ok:false, text:'Generation requires the local workbench server.'};
+  if(!generationEnvironment) return {ok:false, text:'Checking generation environment.'};
+  if(generationEnvironment.owner_token_required && !generationOwnerToken) return {ok:false, text:'Owner token required to start local processing jobs.'};
+  if(backend === 'python_gpu') {
+    const cuda = Boolean(generationEnvironment.gpu?.cuda);
+    return {ok:cuda, text: cuda ? `CUDA ready (${generationEnvironment.gpu?.cuda_device_count || 1} device)` : 'Python GPU selected, but Torch CUDA is unavailable.'};
+  }
+  const fijiOk = Boolean(generationEnvironment.fiji_available);
+  return {ok:fijiOk, text: fijiOk ? 'Fiji/Groovy backend ready.' : 'Fiji executable was not found by the local server.'};
+}
 
 function median(arr){ const a = [...arr].sort((x,y)=>x-y); const m = Math.floor(a.length/2); return a.length % 2 ? a[m] : 0.5*(a[m-1]+a[m]); }
 function madSigma(arr, center){ return Math.max(1e-6, 1.4826 * median(arr.map(v => Math.abs(v - center)))); }
@@ -229,7 +430,26 @@ function roiUncertaintyScore(roi) {
 function roiArtifactLike(roi) {
   const ann = roiAnn(roi.id);
   const artifactClass = ann.artifact_class || ann.artifactClass || '';
-  return Boolean(artifactClass && artifactClass !== 'none') || scoreValue(roi, 'artifactScore') >= 0.4;
+  return artifactReasonsForRoi(roi).length > 0 || Boolean(artifactClass && artifactClass !== 'none');
+}
+function artifactReasonsForRoi(roi){
+  const ann = roiAnn(roi.id);
+  const reasons = [];
+  if(scoreValue(roi, 'artifactScore') >= 0.4) reasons.push('artifact score');
+  if(scoreValue(roi, 'backgroundCorrelation') >= 0.55) reasons.push('background correlated');
+  if(scoreValue(roi, 'localCorrelationMean') > 0 && scoreValue(roi, 'localCorrelationMean') < 0.35) reasons.push('low local coherence');
+  if(roi.area < 8) reasons.push('too small');
+  if(roi.area >= 180) reasons.push('large or merged');
+  const bbox = roi.bbox || [];
+  if(bbox.length === 4) {
+    const w = Math.max(1, bbox[2] - bbox[0] + 1);
+    const h = Math.max(1, bbox[3] - bbox[1] + 1);
+    if(Math.max(w / h, h / w) >= 5) reasons.push('elongated');
+    if(bbox[0] <= 1 || bbox[1] <= 1 || bbox[2] >= data.video.width - 2 || bbox[3] >= data.video.height - 2) reasons.push('near border');
+  }
+  const artifactClass = ann.artifact_class || ann.artifactClass || '';
+  if(artifactClass && artifactClass !== 'none') reasons.push(artifactClass.replace(/_/g, ' '));
+  return [...new Set(reasons)];
 }
 function roiMergedClusterLike(roi) {
   const ann = roiAnn(roi.id);
@@ -257,10 +477,12 @@ function roiTriageCategory(roi) {
 }
 function visibleRois(){
   const queue = setting('queue');
+  const batchIds = queue === 'annotationBatch' ? new Set(nextAnnotationBatch().rois.map(r => String(r.roi_id))) : null;
   let rows = data.rois.filter(r => r.area >= minAreaFilter() && eventsForRoi(r).length >= minEventsFilter());
   rows = rows.filter(r => {
     const ann = roiAnn(r.id);
     if (queue !== 'deleted' && ann.deleted) return false;
+    if (queue === 'annotationBatch') return batchIds.has(String(r.id));
     if (queue === 'unlabeled') return !ann.state;
     if (queue === 'accepted') return ann.state === 'accept';
     if (queue === 'rejected') return ann.state === 'reject';
@@ -290,6 +512,7 @@ function visibleRois(){
   else if (queue === 'weakTrace') rows.sort((a,b) => scoreValue(a, 'traceSnr', 99) - scoreValue(b, 'traceSnr', 99));
   else if (queue === 'needsEventReview') rows.sort((a,b) => eventsForRoi(b).length - eventsForRoi(a).length);
   else if (queue === 'uncertain') rows.sort((a,b) => roiUncertaintyScore(b) - roiUncertaintyScore(a));
+  else if (queue === 'annotationBatch') rows.sort((a,b) => batchIds.has(String(b.id)) - batchIds.has(String(a.id)) || roiReviewPriority(b).score - roiReviewPriority(a).score);
   else rows.sort((a,b) => roiQualityScore(b) - roiQualityScore(a));
   return rows;
 }
@@ -312,6 +535,150 @@ function visibleSuggestions(){
   });
   rows.sort((a,b) => scoreValue(b, 'priorityScore', b.discoveryScore || 0) - scoreValue(a, 'priorityScore', a.discoveryScore || 0));
   return rows;
+}
+
+function roiReviewPriority(roi) {
+  const ann = roiAnn(roi.id);
+  const eventCount = eventsForRoi(roi).length;
+  const traceSnr = scoreValue(roi, 'traceSnr');
+  const localCorr = scoreValue(roi, 'localCorrelationMean');
+  const eventSupport = scoreValue(roi, 'eventSupport');
+  const artifact = scoreValue(roi, 'artifactScore');
+  let score = scoreValue(roi, 'priorityScore') + Math.min(eventCount, 8) * 0.45;
+  score += Math.min(Math.max(traceSnr, 0), 6) * 0.25;
+  score += Math.min(Math.max(localCorr, 0), 1) * 1.2;
+  score += Math.min(Math.max(eventSupport, 0), 1) * 1.1;
+  score -= Math.min(Math.max(artifact, 0), 1) * 1.6;
+  if(!ann.state && !ann.cell_state) score += 2.0;
+  if(ann.needs_action) score += 0.6;
+  if(roi.area >= 20 && roi.area <= 180) score += 0.35;
+  const reasons = [];
+  if(!ann.state && !ann.cell_state) reasons.push('unlabeled ROI');
+  if(eventCount) reasons.push(`${eventCount} events`);
+  if(traceSnr >= 1.5) reasons.push('usable SNR');
+  else if(traceSnr > 0) reasons.push('weak SNR');
+  if(localCorr >= 0.4) reasons.push('coherent');
+  else if(localCorr > 0) reasons.push('low coherence');
+  if(eventSupport >= 0.35) reasons.push('event support');
+  if(artifact >= 0.4) reasons.push('artifact check');
+  return {score, reasons};
+}
+
+function suggestionReviewPriority(s) {
+  const ann = suggestionAnn(s.id);
+  let score = scoreValue(s, 'priorityScore', scoreValue(s, 'discoveryScore'));
+  score += Math.min(Math.max(scoreValue(s, 'localCorrelationMean'), 0), 1) * 0.8;
+  score += Math.min(Math.max(scoreValue(s, 'eventSupport'), 0), 1) * 0.8;
+  if(!ann.state && !annotations.promotedRois[s.id]) score += 1.5;
+  if((s.artifactCue && s.artifactCue !== 'none') || scoreValue(s, 'artifactScore') >= 0.4) score += 0.7;
+  const reasons = [];
+  if(!ann.state && !annotations.promotedRois[s.id]) reasons.push('unlabeled suggestion');
+  if((s.artifactCue && s.artifactCue !== 'none') || scoreValue(s, 'artifactScore') >= 0.4) reasons.push('artifact check');
+  if(scoreValue(s, 'localCorrelationMean') >= 0.4) reasons.push('coherent');
+  if(scoreValue(s, 'eventSupport') >= 0.35) reasons.push('event support');
+  return {score, reasons};
+}
+
+function nextAnnotationBatch(targets={rois:30, events:30, suggestions:15}) {
+  const rois = data.rois
+    .filter(roi => {
+      const ann = roiAnn(roi.id);
+      return !ann.state && !ann.cell_state || Boolean(ann.needs_action);
+    })
+    .map(roi => {
+      const priority = roiReviewPriority(roi);
+      return {
+        roi_id: roi.id,
+        score: priority.score,
+        event_count: eventsForRoi(roi).length,
+        area: roi.area,
+        reasons: priority.reasons
+      };
+    })
+    .sort((a,b) => b.score - a.score || Number(a.roi_id) - Number(b.roi_id))
+    .slice(0, targets.rois);
+  const selected = new Set(rois.map(r => String(r.roi_id)));
+  const events = [];
+  for(const roi of data.rois){
+    for(const ev of eventsForRoi(roi)){
+      const ann = eventAnn(roi.id, ev.frame);
+      if(ann.state || ann.event_state) continue;
+      events.push({
+        roi_id: roi.id,
+        frame: ev.frame,
+        score: roiReviewPriority(roi).score + Number(ev.z || 0) * 0.4 + (selected.has(String(roi.id)) ? 1 : 0),
+        z: ev.z,
+        amplitude: ev.amplitude,
+        reasons: selected.has(String(roi.id)) ? ['unlabeled event', 'selected ROI'] : ['unlabeled event']
+      });
+    }
+  }
+  events.sort((a,b) => b.score - a.score || Number(a.roi_id) - Number(b.roi_id) || Number(a.frame) - Number(b.frame));
+  const suggestions = (data.discovery?.suggestions || [])
+    .filter(s => !suggestionAnn(s.id).state && !annotations.promotedRois[s.id])
+    .map(s => {
+      const priority = suggestionReviewPriority(s);
+      return {suggestion_id: s.id, score: priority.score, area: s.area, reasons: priority.reasons};
+    })
+    .sort((a,b) => b.score - a.score || String(a.suggestion_id).localeCompare(String(b.suggestion_id)))
+    .slice(0, targets.suggestions);
+  return {rois, events: events.slice(0, targets.events), suggestions};
+}
+
+function guidedTasks(){
+  const batch = nextAnnotationBatch(targetCounts());
+  const tasks = [];
+  for(const item of batch.rois) tasks.push({
+    task_id: `roi:${item.roi_id}`,
+    task_type: 'roi',
+    subject_id: String(item.roi_id),
+    priority_score: item.score,
+    prompt: `Decide whether ROI ${item.roi_id} is a neuron, artifact, or unsure case.`,
+    reasons: item.reasons,
+    recommended_context: ['video', 'crop', 'trace', 'event frames']
+  });
+  for(const item of batch.events) tasks.push({
+    task_id: `event:${item.roi_id}:${item.frame}`,
+    task_type: 'event',
+    subject_id: `${item.roi_id}:${item.frame}`,
+    roi_id: String(item.roi_id),
+    frame: item.frame,
+    priority_score: item.score,
+    prompt: `Review ROI ${item.roi_id} event at frame ${item.frame}.`,
+    reasons: item.reasons,
+    recommended_context: ['video', 'trace', 'event frames']
+  });
+  for(const item of batch.suggestions) tasks.push({
+    task_id: `suggestion:${item.suggestion_id}`,
+    task_type: 'suggestion',
+    subject_id: String(item.suggestion_id),
+    priority_score: item.score,
+    prompt: `Check whether suggestion ${item.suggestion_id} is a missed neuron or artifact.`,
+    reasons: item.reasons,
+    recommended_context: ['video', 'evidence map', 'suggestion overlay']
+  });
+  tasks.sort((a,b) => Number(b.priority_score) - Number(a.priority_score) || a.task_id.localeCompare(b.task_id));
+  return tasks;
+}
+
+function currentGuidedTask(){
+  const tasks = guidedTasks();
+  if(!tasks.length) return null;
+  const idx = Math.max(0, Math.min(tasks.length - 1, Number(setting('guidedTaskIndex')) || 0));
+  return tasks[idx];
+}
+
+function selectGuidedTask(task=currentGuidedTask()){
+  if(!task) return;
+  if(task.task_type === 'roi') selectRoi(Number(task.subject_id));
+  else if(task.task_type === 'event') {
+    selectRoi(Number(task.roi_id));
+    selectedEventFrame = Number(task.frame);
+    eventNotes.value = eventAnn(task.roi_id, task.frame).notes || '';
+    setFrame(Number(task.frame));
+  } else if(task.task_type === 'suggestion') {
+    selectSuggestion(task.subject_id);
+  }
 }
 
 function applySettingsToControls() {
@@ -361,6 +728,209 @@ function applyDisplaySettings() {
   evidenceImg.style.opacity = setting('showEvidence') ? '0.58' : '0';
   ctx.globalAlpha = Number(setting('overlayOpacity'));
   resizeOverlay();
+}
+
+function refreshReviewAfterDataChange(){
+  traceCache.clear();
+  slider.max = data.video.frames;
+  if(currentFrame > data.video.frames) currentFrame = data.video.frames;
+  selectedId = data.rois?.[0]?.id || null;
+  selectedRoiIds = new Set(selectedId ? [String(selectedId)] : []);
+  selectedEventFrame = selectedId ? eventsForRoi(selectedRoi())?.[0]?.frame || null : null;
+  selectedSuggestionId = data.discovery?.suggestions?.[0]?.id || null;
+  populateEvidenceSelect();
+  if(!(data.discovery?.evidenceMaps || []).some(m => m.id === setting('evidenceMap'))) annotations.settings.evidenceMap = data.discovery?.evidenceMaps?.[0]?.id || '';
+  applySettingsToControls();
+  renderParams();
+  setFrame(currentFrame || 1);
+  renderAll();
+  renderRunSyncControls();
+}
+
+function renderRunSyncControls(){
+  const select = document.getElementById('activeRunSelect');
+  const status = document.getElementById('activeRunStatus');
+  const panel = document.getElementById('runGeneratePanel');
+  const loadBtn = document.getElementById('loadRunReviewBtn');
+  const openBtn = document.getElementById('openRunViewBtn');
+  const previewBtn = document.getElementById('previewRunViewBtn');
+  const generateBtn = document.getElementById('generateRunViewBtn');
+  const unlockBtn = document.getElementById('unlockGenerationBtn');
+  const refreshBtn = document.getElementById('refreshRunBtn');
+  if(!select || !status || !panel) return;
+  const runs = architectureRuns();
+  const activeId = activeRunId();
+  select.innerHTML = runs.map(run => `<option value="${escapeHtml(run.run_id)}" ${run.run_id === activeId ? 'selected' : ''}>${escapeHtml(runLabel(run))}</option>`).join('');
+  const run = runById(activeId) || runs[0] || null;
+  status.textContent = runStatusLabel(run);
+  const canLoad = runGenerated(run) && Boolean(artifactUrl(run.artifacts?.review_data));
+  const canOpen = Boolean(runAppUrl(run));
+  if(loadBtn) loadBtn.disabled = !canLoad;
+  if(openBtn) openBtn.disabled = !canOpen;
+  const readiness = backendReadiness();
+  const jobActive = currentGenerationJob && ['queued','running'].includes(currentGenerationJob.status);
+  if(previewBtn) {
+    previewBtn.disabled = !run || jobActive || !readiness.ok;
+    previewBtn.textContent = jobActive && currentGenerationJob?.preview ? 'Previewing...' : 'Generate Preview';
+  }
+  if(generateBtn) {
+    generateBtn.disabled = !run || runGenerated(run) || jobActive || !readiness.ok;
+    generateBtn.textContent = jobActive ? 'Generating...' : 'Generate View';
+  }
+  if(unlockBtn) {
+    const needsToken = Boolean(generationEnvironment?.owner_token_required);
+    unlockBtn.classList.toggle('hidden', !needsToken);
+    unlockBtn.textContent = generationOwnerToken ? 'Generation Unlocked' : 'Unlock Generation';
+  }
+  if(refreshBtn) refreshBtn.disabled = !serverBacked;
+  if(run && (!runGenerated(run) || currentGenerationJob)){
+    panel.classList.remove('hidden');
+    const jobHtml = currentGenerationJob ? generationJobHtml(currentGenerationJob) : '';
+    panel.innerHTML = `
+      <div>
+        <b>${escapeHtml(runLabel(run))}</b>
+        <p class="hint">This run is configured, but the Review/QC frame outputs have not been generated or attached yet.</p>
+        <p class="hint">${escapeHtml(readiness.text)}</p>
+      </div>
+      <div>
+        ${jobHtml}
+        <details ${currentGenerationJob ? 'open' : ''}>
+          <summary>Fallback command</summary>
+          <pre>${escapeHtml(generationCommandForRun(run))}</pre>
+        </details>
+      </div>`;
+  } else {
+    panel.classList.add('hidden');
+    panel.innerHTML = '';
+  }
+}
+
+function generationJobHtml(job){
+  const logs = (job.log_tail || []).slice(-20).join('\n');
+  const cls = job.status === 'completed' ? 'ok' : job.status === 'failed' || job.status === 'blocked' ? 'bad' : 'warn';
+  return `
+    <div class="jobStatusBox ${cls}">
+      <div class="componentTitle">
+        <h4>Generation job ${escapeHtml(job.job_id || '')}</h4>
+        <span class="stageStatus ${job.status === 'completed' ? 'ok' : job.status === 'failed' || job.status === 'blocked' ? 'bad' : 'warn'}">${escapeHtml(job.status || 'unknown')}</span>
+      </div>
+      <p class="hint">Stage: ${escapeHtml(job.stage || 'n/a')} | Backend: ${escapeHtml(job.backend || 'auto')}</p>
+      ${job.error ? `<div class="qcWarning">${escapeHtml(job.error)}</div>` : ''}
+      <pre>${escapeHtml(logs || 'Waiting for logs...')}</pre>
+    </div>`;
+}
+
+async function startGenerationJob({preview=false}={}){
+  const run = activeRun();
+  if(!run || !serverBacked) return;
+  const backend = document.getElementById('generationBackend')?.value || 'auto';
+  const readiness = backendReadiness();
+  if(!readiness.ok) {
+    setSaveState(readiness.text, 'bad');
+    renderRunSyncControls();
+    return;
+  }
+  try {
+    const job = await fetchJson(apiUrl(preview ? 'jobs/generate-preview' : 'jobs/generate-view'), {
+      method:'POST',
+      headers:generationHeaders(),
+      body:JSON.stringify({
+        run_id: run.run_id,
+        dataset_id: run.dataset_id || datasetId,
+        backend,
+        stages: preview ? 'high-pass,event-denoise,candidates,temporal-scoring,review-data,proposal-analysis,workbench' : 'all',
+        generate_intermediates: true,
+        preview,
+        force: false
+      })
+    });
+    currentGenerationJob = job;
+    setSaveState(preview ? 'preview generation started' : 'generation started', 'ok');
+    renderRunSyncControls();
+    pollGenerationJob(job.job_id);
+  } catch (err) {
+    currentGenerationJob = err.payload?.job || null;
+    setSaveState(err.message || 'generation failed to start', 'bad');
+    renderRunSyncControls();
+    if(currentGenerationJob?.job_id) pollGenerationJob(currentGenerationJob.job_id);
+  }
+}
+
+async function pollGenerationJob(jobId){
+  clearTimeout(generationPollTimer);
+  if(!jobId) return;
+  try {
+    currentGenerationJob = await fetchJson(apiUrl(`jobs/${jobId}`));
+    renderRunSyncControls();
+    if(['queued','running'].includes(currentGenerationJob.status)) {
+      generationPollTimer = setTimeout(() => pollGenerationJob(jobId), 1500);
+    } else {
+      await refreshArchitectureRuns();
+      if(currentGenerationJob.status === 'completed') {
+        const run = activeRun();
+        if(runGenerated(run)) await loadReviewForRun(run);
+      }
+      renderRunSyncControls();
+    }
+  } catch (_) {
+    generationPollTimer = setTimeout(() => pollGenerationJob(jobId), 3000);
+  }
+}
+
+async function loadReviewForRun(run){
+  if(!runGenerated(run)) {
+    renderRunSyncControls();
+    return;
+  }
+  const url = artifactUrl(run.artifacts?.review_data);
+  if(!url) {
+    setSaveState('review data is not reachable from this server', 'bad');
+    renderRunSyncControls();
+    return;
+  }
+  try {
+    const res = await fetch(url, {cache:'no-store'});
+    if(!res.ok) throw new Error(await res.text());
+    const nextData = rebaseReviewDataAssets(await res.json(), url);
+    nextData.architectureRuns = data.architectureRuns;
+    nextData.pipelineCatalog = data.pipelineCatalog;
+    data = nextData;
+    setSaveState(`loaded ${runLabel(run)}`, 'ok');
+    refreshReviewAfterDataChange();
+  } catch (_) {
+    setSaveState('could not load generated review data', 'bad');
+    renderRunSyncControls();
+  }
+}
+
+async function selectActiveRun(runId, {loadReview=false}={}){
+  const run = runById(runId);
+  captureActiveRunAnnotations();
+  annotations.settings.activeRunId = runId || baselineRunId();
+  annotations.settings.qcRunId = annotations.settings.activeRunId;
+  materializeRunAnnotations(activeRunId());
+  if(loadReview && runGenerated(run)) await loadReviewForRun(run);
+  else {
+    renderRunSyncControls();
+    renderAll();
+    updateQcFrameView();
+  }
+  queueSave();
+}
+
+async function refreshArchitectureRuns(){
+  if(!serverBacked) return;
+  try {
+    const res = await fetch('architecture_runs.json', {cache:'no-store'});
+    if(!res.ok) throw new Error(await res.text());
+    data.architectureRuns = await res.json();
+    renderRunSyncControls();
+    renderArchitectureLab();
+    renderDatasetQc();
+    setSaveState('refreshed architecture runs', 'ok');
+  } catch (_) {
+    setSaveState('could not refresh architecture runs', 'bad');
+  }
 }
 
 function resizeOverlay(){
@@ -522,8 +1092,8 @@ function renderRoiContext(){
   const diameterPx = 2 * Math.sqrt(roi.area / Math.PI);
   const pixelSize = Number(data.dataset?.pixel_size_microns);
   const diameterUm = Number.isFinite(pixelSize) ? `${(diameterPx * pixelSize).toFixed(1)} um` : 'n/a';
-  const warnings = [];
-  if(scoreValue(roi, 'artifactScore') >= 0.45) warnings.push('artifact-risk');
+  const warnings = artifactReasonsForRoi(roi);
+  if(scoreValue(roi, 'artifactScore') >= 0.45 && !warnings.includes('artifact-risk')) warnings.push('artifact-risk');
   if(scoreValue(roi, 'backgroundCorrelation') >= 0.55) warnings.push('background-correlated');
   if(scoreValue(roi, 'localCorrelationMean') > 0 && scoreValue(roi, 'localCorrelationMean') < 0.40) warnings.push('low local correlation');
   if(scoreValue(roi, 'eventSupport') > 0 && scoreValue(roi, 'eventSupport') < 0.35) warnings.push('weak event support');
@@ -576,6 +1146,7 @@ function setFrame(frame){
   selectionText.textContent = roi ? `ROI ${roi.id}${selectedEventFrame ? `, event f${selectedEventFrame}` : ''}` : '';
   drawTrace();
   renderRoiContext();
+  updateQcFrameView();
 }
 
 function selectRoi(id, additive=false){
@@ -839,19 +1410,62 @@ function renderButtons(){
 }
 
 function renderParams(){
-  const rows = Object.entries(data.parameters).map(([k,v]) => `<tr><td>${k}</td><td>${v}</td></tr>`).join('');
+  const rows = Object.entries(data.parameters || {}).map(([k,v]) => `<tr><td>${k}</td><td>${v}</td></tr>`).join('');
   document.getElementById('paramTable').innerHTML = '<tr><th>Parameter</th><th>Value</th></tr>' + rows;
 }
 
 function renderAll(){
   updateCounts();
   renderButtons();
+  renderGuidedPanel();
   renderRoiList();
   renderEventList();
   renderSuggestionList();
   drawOverlay();
   drawTrace();
   renderRoiContext();
+}
+
+function renderGuidedPanel(){
+  const root = document.getElementById('guidedPanel');
+  if(!root) return;
+  const tasks = guidedTasks();
+  const task = currentGuidedTask();
+  const s = annotationSummary();
+  document.getElementById('reviewModeToggle')?.classList.toggle('guidedActive', setting('reviewMode') === 'guided');
+  if(!task){
+    root.innerHTML = '<p class="hint">No guided tasks remain for the current targets.</p>';
+    return;
+  }
+  const idx = Math.max(0, Math.min(tasks.length - 1, Number(setting('guidedTaskIndex')) || 0));
+  root.innerHTML = `
+    <div class="guidedHero">
+      <span class="runStatus">${escapeHtml(task.task_type)}</span>
+      <h3>${escapeHtml(task.prompt)}</h3>
+      <div class="reasonPills">${(task.reasons || []).map(r => `<span>${escapeHtml(r)}</span>`).join('')}</div>
+      <p class="hint">${idx + 1} of ${tasks.length} guided tasks. Context: ${(task.recommended_context || []).join(', ')}.</p>
+    </div>
+    <div class="goalGrid">
+      <div><b>${s.review_progress.reviewed_rois}/${targetCounts().rois}</b><span>ROI goal</span></div>
+      <div><b>${s.review_progress.reviewed_events}/${targetCounts().events}</b><span>event goal</span></div>
+      <div><b>${s.review_progress.reviewed_suggestions}/${targetCounts().suggestions}</b><span>suggestion goal</span></div>
+    </div>
+    <div class="buttonRow">
+      <button id="guidedPrevBtn">Previous Task</button>
+      <button id="guidedOpenBtn">Open Task</button>
+      <button id="guidedNextBtn">Next Task</button>
+    </div>`;
+  document.getElementById('guidedPrevBtn').onclick = () => {
+    setSetting('guidedTaskIndex', Math.max(0, idx - 1));
+    selectGuidedTask();
+    renderAll();
+  };
+  document.getElementById('guidedNextBtn').onclick = () => {
+    setSetting('guidedTaskIndex', Math.min(tasks.length - 1, idx + 1));
+    selectGuidedTask();
+    renderAll();
+  };
+  document.getElementById('guidedOpenBtn').onclick = () => selectGuidedTask(task);
 }
 
 function exportRows(type) {
@@ -941,7 +1555,27 @@ function initControls(){
   document.getElementById('fullscreenBtn').onclick = () => viewerScroll.requestFullscreen?.();
   document.getElementById('eventWindowPrevBtn').onclick = () => nextEvent(-1);
   document.getElementById('eventWindowNextBtn').onclick = () => nextEvent(1);
-  document.getElementById('archRunA').onchange = renderRunComparison;
+  document.getElementById('activeRunSelect').onchange = e => selectActiveRun(e.target.value, {loadReview:false});
+  document.getElementById('loadRunReviewBtn').onclick = () => selectActiveRun(document.getElementById('activeRunSelect').value, {loadReview:true});
+  document.getElementById('openRunViewBtn').onclick = () => {
+    const run = runById(activeRunId());
+    const url = artifactUrl(runAppUrl(run));
+    if(url) location.href = url;
+  };
+  document.getElementById('previewRunViewBtn').onclick = () => startGenerationJob({preview:true});
+  document.getElementById('generateRunViewBtn').onclick = () => startGenerationJob({preview:false});
+  document.getElementById('unlockGenerationBtn').onclick = () => {
+    const token = prompt('Owner token for local generation jobs');
+    if(token !== null) {
+      generationOwnerToken = token.trim();
+      if(generationOwnerToken) localStorage.setItem(ownerTokenKey, generationOwnerToken);
+      else localStorage.removeItem(ownerTokenKey);
+      renderRunSyncControls();
+    }
+  };
+  document.getElementById('refreshRunBtn').onclick = refreshArchitectureRuns;
+  document.getElementById('generationBackend').onchange = renderRunSyncControls;
+  document.getElementById('archRunA').onchange = e => selectActiveRun(e.target.value, {loadReview:false}).then(renderRunComparison);
   document.getElementById('archRunB').onchange = renderRunComparison;
   document.getElementById('archCompareModeBtn').onclick = () => setArchitectureMode('compare');
   document.getElementById('archBuildModeBtn').onclick = () => setArchitectureMode('build');
@@ -963,6 +1597,16 @@ function initControls(){
   };
   document.getElementById('pipelineSaveBtn').onclick = savePlannedRun;
   document.getElementById('pipelineDownloadBtn').onclick = () => downloadJson('planned_architecture_run.json', plannedManifest());
+  document.getElementById('reviewModeToggle').onclick = () => {
+    const next = setting('reviewMode') === 'guided' ? 'explore' : 'guided';
+    setSetting('reviewMode', next);
+    if(next === 'guided') {
+      setSetting('queue', 'annotationBatch');
+      selectGuidedTask();
+    }
+    applySettingsToControls();
+    renderAll();
+  };
   for(const id of ['showRois','showLabels','showEvents']) document.getElementById(id).onchange = drawOverlay;
   document.getElementById('showSuggestions').onchange = e => { setSetting('showSuggestions', e.target.checked); drawOverlay(); };
   document.getElementById('showEvidence').onchange = e => { setSetting('showEvidence', e.target.checked); applyDisplaySettings(); };
@@ -1078,10 +1722,99 @@ function initControls(){
     else if(e.key === 'f') viewerScroll.requestFullscreen?.();
     else if(e.key === 'm') setSuggestionState('missed');
     else if(e.key === 'g') promoteSuggestion();
+    else if(e.key === ']') {
+      const tasks = guidedTasks();
+      setSetting('guidedTaskIndex', Math.min(Math.max(0, tasks.length - 1), Number(setting('guidedTaskIndex') || 0) + 1));
+      selectGuidedTask();
+    }
+    else if(e.key === '[') {
+      setSetting('guidedTaskIndex', Math.max(0, Number(setting('guidedTaskIndex') || 0) - 1));
+      selectGuidedTask();
+    }
   });
   img.onload = () => { resizeOverlay(); drawCrop(); };
   window.onresize = resizeOverlay;
   window.addEventListener('hashchange', routePage);
+}
+
+function availabilityBadge(def){
+  const value = def?.availability || 'implemented';
+  const label = value === 'external_import' ? 'external' : value;
+  return `<span class="stageStatus ${value === 'implemented' ? 'ok' : value === 'planned' ? 'warn' : 'off'}">${escapeHtml(label.replace(/_/g, ' '))}</span>`;
+}
+
+function pipelinePresetSummary(preset){
+  const run = makePresetPipeline(preset.id);
+  const realtime = pipelineRealtimeSummary(run);
+  const ops = run.pipeline.map(stage => stageDef(stage)).filter(Boolean);
+  const chips = ops.slice(0, 7).map(def => `<span>${escapeHtml(def.label)}</span>`).join('');
+  return `
+    <article class="presetCard">
+      <div class="presetHeader">
+        <h3>${escapeHtml(preset.label)}</h3>
+        <span class="stageStatus ${realtime.warnings.length ? 'warn' : 'ok'}">${realtime.warnings.length ? 'review' : 'ready'}</span>
+      </div>
+      <p>${escapeHtml(preset.summary)}</p>
+      <p class="hint">${escapeHtml(preset.best_for)}</p>
+      <div class="archEvidence">${chips}${ops.length > 7 ? `<span>+${ops.length - 7} more</span>` : ''}</div>
+      <div class="buttonRow">
+        <button type="button" data-load-preset="${escapeHtml(preset.id)}">Use preset</button>
+      </div>
+    </article>`;
+}
+
+function renderArchitecturePresets(){
+  const root = document.getElementById('architecturePresetGallery');
+  if(!root) return;
+  root.innerHTML = ARCHITECTURE_PRESETS.map(pipelinePresetSummary).join('');
+  for(const btn of root.querySelectorAll('[data-load-preset]')) btn.onclick = () => {
+    pipelineDraft = makePresetPipeline(btn.dataset.loadPreset);
+    selectedPipelineStageId = pipelineDraft.pipeline[0]?.id || null;
+    const select = document.getElementById('pipelinePresetSelect');
+    if(select) select.value = btn.dataset.loadPreset;
+    setArchitectureMode('build');
+    renderPipelineBuilder();
+  };
+}
+
+function renderComponentLibrary(){
+  const root = document.getElementById('componentLibrary');
+  if(!root) return;
+  const groups = {};
+  for(const def of STAGE_CATALOG) (groups[def.ui_group || def.type || 'stage'] = groups[def.ui_group || def.type || 'stage'] || []).push(def);
+  root.innerHTML = Object.entries(groups).map(([group, defs]) => `
+    <section class="componentGroup">
+      <div class="componentGroupHeader">
+        <h3>${escapeHtml(group.replace(/_/g, ' '))}</h3>
+        <span class="hint">${defs.length} component${defs.length === 1 ? '' : 's'}</span>
+      </div>
+      <div class="componentGrid">
+        ${defs.map(def => {
+          const qc = (def.expected_qc_outputs || []).slice(0, 4).map(item => `<span>${escapeHtml(item)}</span>`).join('');
+          const params = Object.keys(def.params || {}).slice(0, 4).map(name => `<span>${escapeHtml(name)}</span>`).join('');
+          return `
+          <article class="componentCard">
+            <div class="componentTitle">
+              <h4>${escapeHtml(def.label)}</h4>
+              ${availabilityBadge(def)}
+            </div>
+            <p>${escapeHtml(def.description || 'Pipeline component.')}</p>
+            <p class="hint">${escapeHtml(def.why_use_it || '')}</p>
+            <div class="stageMeta">${realtimeBadges(def)}</div>
+            <div class="artifactFlow"><i>${escapeHtml(def.input || 'input')}</i><strong>-></strong><i>${escapeHtml(def.output || 'output')}</i></div>
+            <div class="miniChipRow">${params || '<span>no tunable params</span>'}</div>
+            <div class="miniChipRow qcChips">${qc || '<span>QC pending</span>'}</div>
+            <button type="button" data-add-component="${escapeHtml(def.op)}">Add to stack</button>
+          </article>`;
+        }).join('')}
+      </div>
+    </section>`).join('');
+  for(const btn of root.querySelectorAll('[data-add-component]')) btn.onclick = () => {
+    pipelineDraft.pipeline.push(makeStage(btn.dataset.addComponent, pipelineDraft.pipeline.length));
+    selectedPipelineStageId = pipelineDraft.pipeline[pipelineDraft.pipeline.length - 1].id;
+    setArchitectureMode('build');
+    renderPipelineBuilder();
+  };
 }
 
 function renderArchitectureLab(){
@@ -1089,6 +1822,8 @@ function renderArchitectureLab(){
   if(!root) return;
   const runs = data.architectureRuns?.runs || [];
   populateRunSelectors(runs);
+  renderArchitecturePresets();
+  renderComponentLibrary();
   renderRunComparison();
   renderPipelineBuilder();
   root.innerHTML = '';
@@ -1096,10 +1831,11 @@ function renderArchitectureLab(){
     root.innerHTML = '<p class="hint">No architecture runs are attached yet. Use tools/build_architecture_run.py to create architecture_runs.json.</p>';
     return;
   }
+  root.innerHTML = renderParameterExperiments(runs);
   for(const run of runs){
     const card = document.createElement('div');
     const status = run.execution?.status || 'completed';
-    card.className = `archCard runStatus-${status}`;
+    card.className = `archCard runStatus-${status}${run.run_id === activeRunId() ? ' activeRunCard' : ''}`;
     const evidence = (run.artifacts?.evidence_maps || []).map(m => `<span>${m.label || m.id || 'map'}</span>`).join('');
     const pipeline = (run.pipeline || []).map(stage => {
       const def = stageDef(stage);
@@ -1124,9 +1860,16 @@ function renderArchitectureLab(){
       </table>
       <div class="archEvidence">${pipeline}</div>
       <div class="archEvidence">${sweep}</div>
-      <div class="archEvidence">${evidence}</div>`;
+      <div class="archEvidence">${evidence}</div>
+      <div class="buttonRow">
+        <button type="button" data-activate-run="${escapeHtml(run.run_id)}">Use In Review/QC</button>
+        <button type="button" data-load-review-run="${escapeHtml(run.run_id)}" ${runGenerated(run) ? '' : 'disabled'}>Load Review</button>
+      </div>`;
     root.appendChild(card);
   }
+  for(const btn of root.querySelectorAll('[data-activate-run]')) btn.onclick = () => selectActiveRun(btn.dataset.activateRun, {loadReview:false});
+  for(const btn of root.querySelectorAll('[data-load-review-run]')) btn.onclick = () => selectActiveRun(btn.dataset.loadReviewRun, {loadReview:true});
+  for(const btn of root.querySelectorAll('[data-exp-label]')) btn.onclick = () => setExperimentLabel(btn.dataset.runId, btn.dataset.expLabel);
 }
 
 function runLabel(run){
@@ -1140,6 +1883,75 @@ function runMetric(run, path, fallback=0){
     cur = cur[part];
   }
   return cur === undefined || cur === null ? fallback : cur;
+}
+
+function experimentLabels(){
+  annotations.settings.experimentLabels = annotations.settings.experimentLabels || {};
+  return annotations.settings.experimentLabels;
+}
+
+function experimentLabel(runId){
+  return experimentLabels()[runId] || '';
+}
+
+function setExperimentLabel(runId, label){
+  experimentLabels()[runId] = label;
+  queueSave();
+  renderArchitectureLab();
+}
+
+function runExperimentMetrics(run){
+  const summary = run?.summary || {};
+  const ann = run?.annotation_summary || {};
+  const artifactLike = runMetric(run, 'annotation_summary.triage_queue_counts.artifact_like', null);
+  const missed = runMetric(run, 'annotation_summary.triage_queue_counts.possible_missed_neuron', null);
+  const medianArea = runMetric(run, 'qc.roiAreaStats.median', null);
+  return {
+    rois: summary.roi_count ?? 'n/a',
+    events: summary.event_count ?? 'n/a',
+    suggestions: summary.suggestion_count ?? 'n/a',
+    accepted: ann.roi_states?.accepted ?? 'n/a',
+    artifacts: artifactLike ?? 'n/a',
+    missed: missed ?? 'n/a',
+    median_area: medianArea ?? 'n/a',
+    status: run?.execution?.status || (runGenerated(run) ? 'completed' : 'planned')
+  };
+}
+
+function renderParameterExperiments(runs){
+  const rows = runs.map(run => {
+    const m = runExperimentMetrics(run);
+    const label = experimentLabel(run.run_id);
+    const labelButtons = ['looks best','too noisy','too strict','artifact heavy','needs review'].map(value =>
+      `<button type="button" class="${label === value ? 'active' : ''}" data-run-id="${escapeHtml(run.run_id)}" data-exp-label="${escapeHtml(value)}">${escapeHtml(value)}</button>`
+    ).join('');
+    return `
+      <tr class="${run.run_id === activeRunId() ? 'activeRunRow' : ''}">
+        <td><b>${escapeHtml(runLabel(run))}</b><br><span class="hint">${escapeHtml(run.run_id)}</span></td>
+        <td>${escapeHtml(m.status)}</td>
+        <td>${escapeHtml(m.rois)}</td>
+        <td>${escapeHtml(m.events)}</td>
+        <td>${escapeHtml(m.suggestions)}</td>
+        <td>${escapeHtml(m.accepted)}</td>
+        <td>${escapeHtml(m.artifacts)}</td>
+        <td>${escapeHtml(m.missed)}</td>
+        <td>${escapeHtml(m.median_area)}</td>
+        <td><div class="buttonRow">${labelButtons}</div></td>
+        <td><button type="button" data-activate-run="${escapeHtml(run.run_id)}">Use</button> <a href="#process">Process</a></td>
+      </tr>`;
+  }).join('');
+  return `
+    <section class="archCard experimentBoard">
+      <div class="runCardHeader">
+        <h3>Parameter Experiments</h3>
+        <span class="runStatus">${runs.length} run${runs.length === 1 ? '' : 's'}</span>
+      </div>
+      <p class="hint">Label sweep outputs and compare review burden before committing to a detector setting.</p>
+      <table class="smallTable compareTable">
+        <tr><th>Run</th><th>Status</th><th>ROIs</th><th>Events</th><th>Suggestions</th><th>Accepted</th><th>Artifact-like</th><th>Missed candidates</th><th>Median area</th><th>Label</th><th>Open</th></tr>
+        ${rows}
+      </table>
+    </section>`;
 }
 
 const FALLBACK_STAGE_CATALOG = [
@@ -1197,12 +2009,66 @@ function buildStageCatalog(rawCatalog){
       description: stage.description || '',
       why_use_it: stage.why_use_it || '',
       real_time_profile: stage.real_time_profile || {},
-      parameter_docs: stage.parameter_docs || {}
+      parameter_docs: stage.parameter_docs || {},
+      availability: stage.availability || 'implemented',
+      ui_group: stage.ui_group || stage.type || 'stage',
+      expected_qc_outputs: stage.expected_qc_outputs || []
     };
   });
 }
 
 const STAGE_CATALOG = buildStageCatalog(data.pipelineCatalog);
+
+const ARCHITECTURE_PRESETS = [
+  {
+    id: 'current_review_pipeline',
+    label: 'Current local-z review',
+    summary: 'Baseline proposal workflow used by the current dashboard.',
+    best_for: 'Reviewing the present resting crop and comparing future changes against a known baseline.'
+  },
+  {
+    id: 'adaptive_cfar',
+    label: 'Adaptive CFAR detector',
+    summary: 'Adds local robust scoring plus adaptive Gamma CFAR for nonuniform background.',
+    best_for: 'Bright local clusters, uneven background, and planned 100 Hz streaming tests.'
+  },
+  {
+    id: 'artifact_suppression',
+    label: 'Artifact suppression pass',
+    summary: 'Front-loads despiking, heterogeneity maps, artifact classification, and active-learning ranking.',
+    best_for: 'Impulse noise, vessels/static blobs, borders, and false positives that burden review.'
+  },
+  {
+    id: 'high_recall_discovery',
+    label: 'High-recall discovery',
+    summary: 'Combines local-z candidates with correlation and event-triggered footprint evidence.',
+    best_for: 'Finding missed neurons before tightening thresholds.'
+  },
+  {
+    id: 'motion_aware',
+    label: 'Motion-aware QC',
+    summary: 'Tracks drift and motion sensitivity before scoring candidates.',
+    best_for: 'Datasets where weak candidates may be explained by frame-to-frame movement.'
+  },
+  {
+    id: 'pmd_import',
+    label: 'PMD denoised local-z',
+    summary: 'Uses an external PMD-denoised stack as the input to the local-z detector.',
+    best_for: 'Offline denoising comparisons and low-SNR recordings.'
+  },
+  {
+    id: 'suite2p_import',
+    label: 'Suite2p import',
+    summary: 'Imports Suite2p ROI proposals for review and ranking in this dashboard.',
+    best_for: 'Benchmarking against a common calcium-imaging segmentation pipeline.'
+  },
+  {
+    id: 'oasis_import',
+    label: 'OASIS event model',
+    summary: 'Keeps current ROI proposals but swaps event scoring toward deconvolved traces.',
+    best_for: 'Comparing calcium-transient calls against a standard event/deconvolution model.'
+  }
+];
 
 let pipelineDraft = makePresetPipeline('current_review_pipeline');
 let selectedPipelineStageId = pipelineDraft.pipeline[0]?.id || null;
@@ -1309,17 +2175,25 @@ function normalizePipelineDraft(run){
 }
 
 function makePresetPipeline(name){
-  const ops = name === 'pmd_import' ? ['pmd_denoised_video_import', 'robust_positive_local_z', 'component_filter', 'robust_kalman_positive_innovation', 'heuristic_priority_v1'] :
-    name === 'suite2p_import' ? ['suite2p_import', 'heuristic_priority_v1'] :
-    name === 'oasis_import' ? ['temporal_highpass_gaussian', 'robust_positive_local_z', 'component_filter', 'local_background_ring', 'oasis_deconvolution_import', 'heuristic_priority_v1'] :
-    ['temporal_highpass_gaussian', 'robust_positive_local_z', 'component_filter', 'local_background_ring', 'robust_kalman_positive_innovation', 'heuristic_priority_v1'];
+  const presetOps = {
+    current_review_pipeline: ['temporal_highpass_gaussian', 'robust_positive_local_z', 'component_filter', 'local_background_ring', 'robust_kalman_positive_innovation', 'heuristic_priority_v1'],
+    adaptive_cfar: ['temporal_highpass_gaussian', 'spatial_gaussian', 'robust_positive_local_z', 'adaptive_gamma_cfar', 'component_filter', 'local_background_ring', 'robust_kalman_positive_innovation', 'heuristic_priority_v1'],
+    artifact_suppression: ['temporal_highpass_gaussian', 'temporal_hampel', 'robust_positive_local_z', 'background_heterogeneity_map', 'saturation_blob_map', 'component_filter', 'artifact_classifier_v1', 'active_learning_ranker'],
+    high_recall_discovery: ['temporal_highpass_gaussian', 'robust_positive_local_z', 'component_filter', 'local_background_ring', 'robust_kalman_positive_innovation', 'local_temporal_correlation', 'event_triggered_footprint', 'ensemble_union', 'heuristic_priority_v1'],
+    motion_aware: ['temporal_highpass_gaussian', 'rigid_shift_estimate', 'motion_sensitivity_map', 'robust_positive_local_z', 'component_filter', 'local_background_ring', 'robust_kalman_positive_innovation', 'heuristic_priority_v1'],
+    pmd_import: ['pmd_denoised_video_import', 'robust_positive_local_z', 'component_filter', 'robust_kalman_positive_innovation', 'heuristic_priority_v1'],
+    suite2p_import: ['suite2p_import', 'heuristic_priority_v1'],
+    oasis_import: ['temporal_highpass_gaussian', 'robust_positive_local_z', 'component_filter', 'local_background_ring', 'oasis_deconvolution_import', 'heuristic_priority_v1']
+  };
+  const ops = presetOps[name] || presetOps.current_review_pipeline;
   const pipeline = ops.map((op, i) => makeStage(op, i));
   const runId = `planned_${name}_${Date.now().toString(36)}`;
+  const preset = ARCHITECTURE_PRESETS.find(p => p.id === name);
   return {
     schema_version: 1,
     run_id: runId,
     dataset_id: datasetId,
-    label: name === 'current_review_pipeline' ? 'Planned current-style pipeline' : `Planned ${name.replace(/_/g, ' ')}`,
+    label: preset ? `Planned ${preset.label}` : `Planned ${name.replace(/_/g, ' ')}`,
     method_family: 'architecture_lab_pipeline',
     purpose: 'candidate_proposal',
     pipeline,
@@ -1686,7 +2560,9 @@ async function savePlannedRun(){
     downloadJson('planned_architecture_run.json', manifest);
     setSaveState('downloaded planned run', 'ok');
   }
+  if(planned.runs?.[0]?.run_id) annotations.settings.activeRunId = planned.runs[0].run_id;
   renderArchitectureLab();
+  renderRunSyncControls();
 }
 
 function setArchitectureMode(mode){
@@ -1710,7 +2586,8 @@ function populateRunSelectors(runs){
       opt.textContent = runLabel(run);
       select.appendChild(opt);
     }
-    if(runs.some(r => r.run_id === previous)) select.value = previous;
+    if(id === 'archRunA' && runs.some(r => r.run_id === activeRunId())) select.value = activeRunId();
+    else if(runs.some(r => r.run_id === previous)) select.value = previous;
     else if(runs[defaultIndex]) select.value = runs[defaultIndex].run_id;
   }
 }
@@ -1777,6 +2654,9 @@ function annotationSummary(){
     if(ss === 'artifact' || (ann.artifact_class || ann.artifactClass) || (s.artifactCue && s.artifactCue !== 'none') || scoreValue(s, 'artifactScore') >= 0.4) triageQueues.artifact_like++;
   }
   const eventCount = Object.values(eventStates).reduce((a,b) => a+b, 0);
+  const reviewedRois = roiStates.accepted + roiStates.rejected + roiStates.unsure;
+  const reviewedEvents = eventStates.accepted + eventStates.rejected + eventStates.unsure;
+  const reviewedSuggestions = suggestionStates.promoted + suggestionStates.missed + suggestionStates.artifact + suggestionStates.unsure;
   return {
     roi_count: data.rois.length,
     event_count: eventCount,
@@ -1791,6 +2671,16 @@ function annotationSummary(){
     review_burden: {
       candidate_rois_per_accepted_roi: data.rois.length / Math.max(1, roiStates.accepted),
       candidate_events_per_accepted_event: eventCount / Math.max(1, eventStates.accepted)
+    },
+    review_progress: {
+      reviewed_rois: reviewedRois,
+      reviewed_events: reviewedEvents,
+      reviewed_suggestions: reviewedSuggestions,
+      roi_review_fraction: reviewedRois / Math.max(1, data.rois.length),
+      event_review_fraction: reviewedEvents / Math.max(1, eventCount),
+      suggestion_review_fraction: reviewedSuggestions / Math.max(1, data.discovery?.suggestions?.length || 0),
+      tuning_ready: reviewedRois >= 20 && reviewedEvents >= 20,
+      tuning_ready_targets: {reviewed_rois: 20, reviewed_events: 20}
     }
   };
 }
@@ -1810,6 +2700,16 @@ function renderMetricsAudit(){
   if(!root) return;
   const s = annotationSummary();
   const actionCount = Object.values(annotations.reviewStats?.actions || {}).reduce((a,b) => a + b, 0);
+  const batch = nextAnnotationBatch();
+  const batchRows = batch.rois.slice(0, 10).map(item => `
+    <tr><td>${item.roi_id}</td><td>${fmt(item.score, 2)}</td><td>${item.event_count}</td><td>${escapeHtml(item.reasons.join(', '))}</td></tr>
+  `).join('');
+  const eventRows = batch.events.slice(0, 8).map(item => `
+    <tr><td>${item.roi_id}</td><td>${item.frame}</td><td>${fmt(item.score, 2)}</td><td>${fmt(item.z, 2)}</td></tr>
+  `).join('');
+  const suggestionRows = batch.suggestions.slice(0, 8).map(item => `
+    <tr><td>${item.suggestion_id}</td><td>${fmt(item.score, 2)}</td><td>${escapeHtml(item.reasons.join(', '))}</td></tr>
+  `).join('');
   root.innerHTML = `
     <div class="metricGrid">
       <div class="metric"><b>${s.roi_count}</b><span>candidate ROIs</span></div>
@@ -1822,6 +2722,26 @@ function renderMetricsAudit(){
       <div class="metric"><b>${s.review_burden.candidate_events_per_accepted_event.toFixed(1)}</b><span>events per accepted event</span></div>
       <div class="metric"><b>${actionCount}</b><span>review actions</span></div>
       <div class="metric"><b>${annotations.reviewStats?.lastActionAt ? 'yes' : 'no'}</b><span>active session</span></div>
+      <div class="metric"><b>${Math.round(100 * s.review_progress.roi_review_fraction)}%</b><span>ROI review progress</span></div>
+      <div class="metric"><b>${s.review_progress.tuning_ready ? 'yes' : 'no'}</b><span>tuning-ready labels</span></div>
+    </div>
+    <div class="archCard annotationBatchCard">
+      <div class="runCardHeader"><h3>Recommended Next Annotation Batch</h3><span class="runStatus">${s.review_progress.reviewed_rois}/${s.review_progress.tuning_ready_targets.reviewed_rois} ROI labels</span></div>
+      <p class="hint">Use the Review queue option “Next annotation batch” to work through these candidates first. The first tuning milestone is 20 reviewed ROIs and 20 reviewed events.</p>
+      <div class="batchGrid">
+        <div>
+          <h2>ROIs</h2>
+          <table class="smallTable"><tr><th>ID</th><th>Score</th><th>Events</th><th>Why</th></tr>${batchRows || '<tr><td colspan="4">No ROI batch items.</td></tr>'}</table>
+        </div>
+        <div>
+          <h2>Events</h2>
+          <table class="smallTable"><tr><th>ROI</th><th>Frame</th><th>Score</th><th>z</th></tr>${eventRows || '<tr><td colspan="4">No event batch items.</td></tr>'}</table>
+        </div>
+        <div>
+          <h2>Suggestions</h2>
+          <table class="smallTable"><tr><th>ID</th><th>Score</th><th>Why</th></tr>${suggestionRows || '<tr><td colspan="3">No suggestion batch items.</td></tr>'}</table>
+        </div>
+      </div>
     </div>
     <div class="auditSplit">
       <div class="archCard">${auditRows('ROI states', s.roi_states)}</div>
@@ -1844,9 +2764,252 @@ function fmt(v, digits=2){
   return v === null || v === undefined || Number.isNaN(v) ? 'n/a' : Number(v).toFixed(digits);
 }
 
+function availableEvidenceMapsForRun(run){
+  const runMaps = run?.artifacts?.evidence_maps || [];
+  const maps = runMaps.length ? runMaps : (data.discovery?.evidenceMaps || []);
+  return maps.filter(m => m && (m.file || m.path));
+}
+
+function selectedQcRun(){
+  const runs = data.architectureRuns?.runs || [];
+  const selected = activeRunId();
+  return runs.find(r => r.run_id === selected) || runs[0] || null;
+}
+
+function normalizedRunPipeline(run){
+  return (run?.pipeline || []).map((stage, index) => {
+    const def = stageDef(stage);
+    if(def) return normalizeStageForBuilder(stage, index);
+    return Object.assign({id: `legacy_stage_${index + 1}`, enabled: true}, stage, {stage_id: stageOp(stage), op: stageOp(stage), type: stage.type || 'legacy'});
+  });
+}
+
+function qcOutputAvailable(output, run){
+  const key = String(output || '').toLowerCase();
+  if(!key) return false;
+  if(key.includes('frame') && data.video?.framePattern) return true;
+  if(key.includes('drift') && data.qc?.driftStats) return true;
+  if(key.includes('noise') && data.qc?.noiseSigmaStats) return true;
+  if(key.includes('roi') && data.rois?.length) return true;
+  if(key.includes('event') && data.rois?.some(r => (r.events || []).length)) return true;
+  if(key.includes('suggestion') && data.discovery?.suggestions?.length) return true;
+  if(key.includes('map') && availableEvidenceMapsForRun(run).length) return true;
+  if(key.includes('trace') && data.rois?.length) return true;
+  return false;
+}
+
+function renderQcStageTimeline(run){
+  const root = document.getElementById('qcPipelineTimeline');
+  if(!root) return;
+  const pipeline = normalizedRunPipeline(run);
+  if(!pipeline.length){
+    root.innerHTML = '<p class="hint">No pipeline is attached to this run yet.</p>';
+    return;
+  }
+  root.innerHTML = pipeline.map((stage, index) => {
+    const def = stageDef(stage);
+    const expected = def?.expected_qc_outputs || [];
+    const outputs = expected.length ? expected.map(item => `<span class="${qcOutputAvailable(item, run) ? 'available' : ''}">${escapeHtml(item)}</span>`).join('') : '<span>no declared QC outputs</span>';
+    const status = stage.enabled === false ? 'disabled' : (run?.execution?.status || def?.availability || 'available');
+    return `
+      <div class="qcPipelineStep">
+        <span class="stageIndex">${index + 1}</span>
+        <div>
+          <div class="componentTitle">
+            <h4>${escapeHtml(def?.label || stage.label || stage.name || stageOp(stage) || stage.id)}</h4>
+            <span class="stageStatus ${status === 'completed' || status === 'implemented' ? 'ok' : status === 'planned' ? 'warn' : 'off'}">${escapeHtml(String(status).replace(/_/g, ' '))}</span>
+          </div>
+          <p>${escapeHtml(def?.description || 'Legacy architecture-run step.')}</p>
+          <div class="artifactFlow"><i>${escapeHtml(stage.input || def?.input || 'input')}</i><strong>-></strong><i>${escapeHtml(stage.output || def?.output || 'output')}</i></div>
+          <div class="miniChipRow qcChips">${outputs}</div>
+        </div>
+      </div>`;
+  }).join('');
+}
+
+function intermediateArtifactsForRun(run){
+  return Array.isArray(run?.artifacts?.intermediates) ? run.artifacts.intermediates : [];
+}
+function findIntermediateForStage(stage, run){
+  const op = stageOp(stage);
+  const id = stage.id || '';
+  return intermediateArtifactsForRun(run).find(item =>
+    item.step_id === id || item.stage_id === op || item.stage === id || item.id === id || item.id === op
+  );
+}
+function qcTileImageHtml(tile){
+  if(tile.frame_pattern) return `<img class="qcStageMedia" data-frame-pattern="${escapeHtml(tile.frame_pattern)}" data-missing-text="${escapeHtml(tile.label)} frame did not load" onerror="handleQcImageError(this)" alt="${escapeHtml(tile.label)}">`;
+  if(tile.file || tile.path) return `<img class="qcStageMedia" src="${escapeHtml(artifactUrl(tile.file || tile.path))}" data-missing-text="${escapeHtml(tile.label)} artifact did not load" onerror="handleQcImageError(this)" alt="${escapeHtml(tile.label)}">`;
+  return `<div class="qcStageMissing">${escapeHtml(tile.missing || 'Output not generated yet')}</div>`;
+}
+function handleQcImageError(imgEl){
+  const msg = imgEl?.dataset?.missingText || 'Artifact did not load';
+  const div = document.createElement('div');
+  div.className = 'qcStageMissing';
+  div.textContent = msg;
+  imgEl.closest('.qcStageTile')?.classList.add('missing');
+  imgEl.replaceWith(div);
+}
+function qcStageTiles(run){
+  const tiles = [{
+    id: 'raw_video',
+    label: 'Raw video',
+    stage_id: 'source_video_import',
+    status: 'available',
+    frame_pattern: data.video?.framePattern,
+    description: 'Source frames used by the current review data.'
+  }];
+  const pipeline = normalizedRunPipeline(run);
+  for(const stage of pipeline){
+    const def = stageDef(stage);
+    const artifact = findIntermediateForStage(stage, run);
+    tiles.push({
+      id: stage.id || stageOp(stage),
+      label: artifact?.label || def?.label || stage.label || stage.name || stageOp(stage),
+      stage_id: stageOp(stage),
+      status: artifact ? 'available' : 'missing',
+      frame_pattern: artifact?.frame_pattern || artifact?.framePattern,
+      file: artifact?.file,
+      path: artifact?.path,
+      description: artifact?.description || def?.description || 'Pipeline stage output.',
+      missing: artifact ? '' : 'Intermediate frames not attached yet.'
+    });
+  }
+  for(const map of availableEvidenceMapsForRun(run)) tiles.push({
+    id: map.id || map.label,
+    label: map.label || map.id || 'Evidence map',
+    stage_id: 'evidence_map',
+    status: 'available',
+    file: map.file || map.path,
+    description: 'Static evidence map from the selected run.'
+  });
+  return tiles;
+}
+function renderQcStageGrid(run){
+  const root = document.getElementById('qcStageGrid');
+  if(!root) return;
+  const size = document.getElementById('qcTileSize')?.value || 'medium';
+  const missingOnly = Boolean(document.getElementById('qcMissingOnly')?.checked);
+  const tiles = qcStageTiles(run).filter(tile => !missingOnly || tile.status === 'missing');
+  root.className = `qcStageGrid ${escapeHtml(size)}`;
+  root.innerHTML = tiles.map(tile => `
+    <article class="qcStageTile ${tile.status === 'missing' ? 'missing' : ''}">
+      <div class="componentTitle">
+        <h4>${escapeHtml(tile.label)}</h4>
+        <span class="stageStatus ${tile.status === 'available' ? 'ok' : 'warn'}">${escapeHtml(tile.status)}</span>
+      </div>
+      <div class="qcStageFrame">${qcTileImageHtml(tile)}</div>
+      <p>${escapeHtml(tile.description || '')}</p>
+      <div class="miniChipRow"><span>${escapeHtml(tile.stage_id || 'stage')}</span></div>
+    </article>`).join('');
+  updateQcFrameView();
+}
+
+function updateQcFrameView(){
+  const qcSlider = document.getElementById('qcFrameSlider');
+  const qcLabel = document.getElementById('qcFrameLabel');
+  if(qcSlider) qcSlider.value = currentFrame;
+  if(qcLabel) qcLabel.textContent = `${currentFrame} / ${data.video.frames}`;
+  for(const imgEl of document.querySelectorAll('[data-frame-pattern]')){
+    imgEl.src = framePatternPath(imgEl.dataset.framePattern, currentFrame);
+  }
+}
+
+function toggleQcPlay(){
+  const btn = document.getElementById('qcPlayBtn');
+  if(qcTimer) {
+    clearInterval(qcTimer);
+    qcTimer = null;
+    if(btn) btn.textContent = 'Play';
+    return;
+  }
+  if(btn) btn.textContent = 'Pause';
+  qcTimer = setInterval(() => setFrame(currentFrame >= data.video.frames ? 1 : currentFrame + 1), 120);
+}
+
+function wireDatasetQcControls(){
+  const runSelect = document.getElementById('qcRunSelect');
+  if(runSelect) runSelect.onchange = async e => {
+    await selectActiveRun(e.target.value, {loadReview:false});
+    renderDatasetQc();
+  };
+  const mapSelect = document.getElementById('qcEvidenceSelect');
+  if(mapSelect) mapSelect.onchange = e => {
+    setSetting('qcEvidenceMap', e.target.value);
+    updateQcFrameView();
+  };
+  const frameSlider = document.getElementById('qcFrameSlider');
+  if(frameSlider) frameSlider.oninput = e => setFrame(Number(e.target.value));
+  const tileSize = document.getElementById('qcTileSize');
+  const missingOnly = document.getElementById('qcMissingOnly');
+  if(tileSize) tileSize.onchange = () => renderQcStageGrid(selectedQcRun());
+  if(missingOnly) missingOnly.onchange = () => renderQcStageGrid(selectedQcRun());
+  const prev = document.getElementById('qcPrevFrameBtn');
+  const next = document.getElementById('qcNextFrameBtn');
+  const play = document.getElementById('qcPlayBtn');
+  if(prev) prev.onclick = () => setFrame(currentFrame - 1);
+  if(next) next.onclick = () => setFrame(currentFrame + 1);
+  if(play) play.onclick = toggleQcPlay;
+}
+
+function processInsightPanel(run){
+  const analysis = proposalAnalysisForRun(run);
+  const proposalRows = analysis?.missed_neuron_proposals?.rows || null;
+  const artifactRows = analysis?.artifact_classifier?.rows || null;
+  const missed = proposalRows ? proposalRows.slice(0, 8)
+    .map(s => `<tr><td>${escapeHtml(s.suggestion_id)}</td><td>${fmt(s.proposal_score, 2)}</td><td>${fmt(s.event_support, 2)}</td><td>${escapeHtml(s.reasons?.join(', ') || s.artifact_cue || 'none')}</td></tr>`)
+    .join('') : [...(data.discovery?.suggestions || [])]
+      .sort((a,b) => scoreValue(b, 'priorityScore', scoreValue(b, 'discoveryScore')) - scoreValue(a, 'priorityScore', scoreValue(a, 'discoveryScore')))
+      .slice(0, 8)
+      .map(s => `<tr><td>${escapeHtml(s.id)}</td><td>${fmt(scoreValue(s, 'priorityScore', scoreValue(s, 'discoveryScore')), 2)}</td><td>${fmt(scoreValue(s, 'eventSupport', null), 2)}</td><td>${escapeHtml(s.artifactCue || 'none')}</td></tr>`)
+      .join('');
+  const artifacts = artifactRows ? artifactRows.slice(0, 8)
+    .map(row => `<tr><td>${escapeHtml(row.roi_id)}</td><td>${fmt(row.artifact_risk, 2)}</td><td>${escapeHtml(row.area)}</td><td>${escapeHtml(row.reasons?.join(', ') || 'none')}</td></tr>`)
+    .join('') : [...data.rois]
+      .map(roi => ({roi, reasons: artifactReasonsForRoi(roi)}))
+      .filter(item => item.reasons.length)
+      .sort((a,b) => scoreValue(b.roi, 'artifactScore') - scoreValue(a.roi, 'artifactScore'))
+      .slice(0, 8)
+      .map(item => `<tr><td>${escapeHtml(item.roi.id)}</td><td>${fmt(scoreValue(item.roi, 'artifactScore', null), 2)}</td><td>${escapeHtml(item.roi.area)}</td><td>${escapeHtml(item.reasons.join(', '))}</td></tr>`)
+      .join('');
+  const loading = analysis?.status === 'loading' ? '<span class="stageStatus warn">loading generated analysis</span>' : '';
+  const error = analysis?.status === 'error' ? `<div class="qcWarning">${escapeHtml(analysis.error)}</div>` : '';
+  const artifactsLink = proposalAnalysisUrl(run) ? `<a href="${escapeHtml(proposalAnalysisUrl(run))}" target="_blank" rel="noreferrer">proposal_analysis.json</a>` : '';
+  const proposalSummary = analysis?.missed_neuron_proposals?.summary;
+  const classifierSummary = analysis?.artifact_classifier;
+  return `
+    <section class="archCard processInsightPanel">
+      <div class="runCardHeader">
+        <h3>Discovery And Artifact Triage</h3>
+        <span class="runStatus">active run: ${escapeHtml(runLabel(run))}</span>
+      </div>
+      <div class="miniChipRow">
+        ${loading}
+        ${artifactsLink ? `<span>${artifactsLink}</span>` : '<span>using embedded review data</span>'}
+        ${proposalSummary ? `<span>${proposalSummary.high_confidence_count} high-confidence missed-neuron proposals</span>` : ''}
+        ${classifierSummary ? `<span>${classifierSummary.high_risk_count} artifact-risk ROI cues</span>` : ''}
+      </div>
+      ${error}
+      <div class="batchGrid">
+        <div>
+          <h2>Missed-neuron candidates</h2>
+          <table class="smallTable"><tr><th>ID</th><th>Score</th><th>Event support</th><th>Why it matters</th></tr>${missed || '<tr><td colspan="4">No suggestions available.</td></tr>'}</table>
+        </div>
+        <div>
+          <h2>Artifact-risk ROIs</h2>
+          <table class="smallTable"><tr><th>ROI</th><th>Risk</th><th>Area</th><th>Reasons</th></tr>${artifacts || '<tr><td colspan="4">No artifact-risk ROIs flagged.</td></tr>'}</table>
+        </div>
+      </div>
+    </section>`;
+}
+
 function renderDatasetQc(){
   const root = document.getElementById('datasetQc');
   if(!root) return;
+  const runs = data.architectureRuns?.runs || [];
+  const run = selectedQcRun();
+  const mapsForRun = availableEvidenceMapsForRun(run);
+  if(mapsForRun.length && !mapsForRun.some(m => (m.id || m.label) === setting('qcEvidenceMap'))) annotations.settings.qcEvidenceMap = mapsForRun[0].id || mapsForRun[0].label || '';
   const areas = data.rois.map(r => Number(r.area));
   const diamPx = areas.map(a => 2 * Math.sqrt(a / Math.PI));
   const pixelSize = Number(data.dataset?.pixel_size_microns);
@@ -1873,7 +3036,38 @@ function renderDatasetQc(){
       <img src="${m.file}" alt="${m.label}">
       <p class="hint">${m.label}</p>
     </div>`).join('');
+  const runOptions = runs.map(r => `<option value="${escapeHtml(r.run_id)}" ${run?.run_id === r.run_id ? 'selected' : ''}>${escapeHtml(runLabel(r))}</option>`).join('');
+  const evidenceOptions = mapsForRun.map(m => `<option value="${escapeHtml(m.id || m.label)}" ${(setting('qcEvidenceMap') || '') === (m.id || m.label) ? 'selected' : ''}>${escapeHtml(m.label || m.id || 'evidence map')}</option>`).join('');
   root.innerHTML = `
+    <div class="qcWorkbench">
+      <section class="qcViewerPanel">
+        <div class="toolbar">
+          <button id="qcPlayBtn">Play</button>
+          <button id="qcPrevFrameBtn">Prev</button>
+          <button id="qcNextFrameBtn">Next</button>
+          <label>Frame <input id="qcFrameSlider" type="range" min="1" max="${data.video.frames}" value="${currentFrame}"></label>
+          <b id="qcFrameLabel">${currentFrame} / ${data.video.frames}</b>
+          <label>Tile size
+            <select id="qcTileSize">
+              <option value="medium">Medium</option>
+              <option value="large">Large</option>
+              <option value="compact">Compact</option>
+            </select>
+          </label>
+          <label><input id="qcMissingOnly" type="checkbox"> missing outputs only</label>
+        </div>
+        <div id="qcStageGrid" class="qcStageGrid medium"></div>
+      </section>
+      <section class="qcPipelinePanel">
+        <div class="componentGroupHeader">
+          <h3>Pipeline Context</h3>
+          <label>Run <select id="qcRunSelect">${runOptions}</select></label>
+        </div>
+        <p class="hint">Process Lab follows the active Architecture Lab run, so raw frames, intermediate outputs, and warnings stay in pipeline order.</p>
+        <div id="qcPipelineTimeline"></div>
+      </section>
+    </div>
+    ${processInsightPanel(run)}
     <div class="metricGrid">
       <div class="metric"><b>${data.video.width} x ${data.video.height}</b><span>frame size</span></div>
       <div class="metric"><b>${data.video.frames}</b><span>frames</span></div>
@@ -1897,24 +3091,93 @@ function renderDatasetQc(){
     </div>
     <h2>Evidence Maps</h2>
     <div class="qcMapGrid">${maps}</div>`;
+  wireDatasetQcControls();
+  renderQcStageTimeline(run);
+  renderQcStageGrid(run);
+}
+
+function reviewReportMarkdown(){
+  const s = annotationSummary();
+  const batch = nextAnnotationBatch();
+  const lines = [
+    `# Neuron Workbench Review Report: ${datasetId}`,
+    '',
+    '## Review Status',
+    '',
+    `- Candidate ROIs: ${s.roi_count}`,
+    `- Candidate events: ${s.event_count}`,
+    `- Discovery suggestions: ${s.suggestion_count}`,
+    `- Reviewed ROIs: ${s.review_progress.reviewed_rois} (${Math.round(100 * s.review_progress.roi_review_fraction)}%)`,
+    `- Reviewed events: ${s.review_progress.reviewed_events} (${Math.round(100 * s.review_progress.event_review_fraction)}%)`,
+    `- Tuning-ready: ${s.review_progress.tuning_ready ? 'yes' : 'no'}`,
+    '',
+    '## Accepted Outputs',
+    '',
+    `- Accepted ROIs: ${s.roi_states.accepted}`,
+    `- Accepted events: ${s.event_states.accepted}`,
+    `- Control-ready yes/maybe: ${s.control_ready.yes} / ${s.control_ready.maybe}`,
+    '',
+    '## Recommended Next Review',
+    ''
+  ];
+  for(const roi of batch.rois.slice(0, 5)) lines.push(`- ROI ${roi.roi_id}: score ${fmt(roi.score, 2)}, ${(roi.reasons || []).join(', ')}`);
+  lines.push('', '## Recommendations', '');
+  if(!s.review_progress.tuning_ready) lines.push('- Complete the first guided annotation target before treating parameter comparisons as tuning evidence.');
+  if(s.suggestion_states.unlabeled) lines.push('- Audit missed-neuron suggestions to estimate recall gaps.');
+  if(s.roi_states.accepted && !s.control_ready.yes) lines.push('- Mark trace quality and control readiness for accepted ROIs before inverse-dynamics export.');
+  if(s.review_progress.tuning_ready) lines.push('- Generate a review sweep pack and compare candidate stability across presets.');
+  return lines.join('\n') + '\n';
+}
+
+function renderReviewReport(){
+  const root = document.getElementById('reportPageBody');
+  if(!root) return;
+  const s = annotationSummary();
+  const markdown = reviewReportMarkdown();
+  root.innerHTML = `
+    <div class="reportHero">
+      <div>
+        <h2>Review Summary</h2>
+        <p class="hint">A shareable snapshot of annotation progress, accepted outputs, and recommended next work.</p>
+      </div>
+      <button id="downloadReportBtn">Download Markdown</button>
+    </div>
+    <div class="metricGrid">
+      <div class="metric"><b>${s.roi_states.accepted}</b><span>accepted ROIs</span></div>
+      <div class="metric"><b>${s.event_states.accepted}</b><span>accepted events</span></div>
+      <div class="metric"><b>${s.control_ready.yes + s.control_ready.maybe}</b><span>control-ready yes/maybe</span></div>
+      <div class="metric"><b>${s.review_progress.tuning_ready ? 'yes' : 'no'}</b><span>tuning ready</span></div>
+    </div>
+    <pre class="reportPreview">${escapeHtml(markdown)}</pre>`;
+  document.getElementById('downloadReportBtn').onclick = () => {
+    const blob = new Blob([markdown], {type:'text/markdown'});
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = `${datasetId}_review_report.md`;
+    a.click();
+    URL.revokeObjectURL(a.href);
+  };
 }
 
 function routePage(){
   const hash = (location.hash || '#review').replace(/^#\/?/, '');
-  const page = hash === 'architecture' || hash === 'architecture-lab' ? 'architecture' : hash === 'metrics' || hash === 'audit' ? 'metrics' : hash === 'qc' || hash === 'dataset-qc' ? 'qc' : 'review';
-  for(const id of ['reviewTab','reviewTabArch','reviewTabMetrics','reviewTabQc']) document.getElementById(id)?.classList.toggle('active', page === 'review');
-  for(const id of ['architectureTab','architectureTabArch','architectureTabMetrics','architectureTabQc']) document.getElementById(id)?.classList.toggle('active', page === 'architecture');
-  for(const id of ['metricsTab','metricsTabArch','metricsTabMetrics','metricsTabQc']) document.getElementById(id)?.classList.toggle('active', page === 'metrics');
-  for(const id of ['qcTab','qcTabArch','qcTabMetrics','qcTabQc']) document.getElementById(id)?.classList.toggle('active', page === 'qc');
+  const page = hash === 'architecture' || hash === 'architecture-lab' ? 'architecture' : hash === 'metrics' || hash === 'audit' ? 'metrics' : hash === 'process' || hash === 'process-lab' || hash === 'qc' || hash === 'dataset-qc' ? 'qc' : hash === 'report' ? 'report' : 'review';
+  for(const id of ['reviewTab','reviewTabArch','reviewTabMetrics','reviewTabQc','reviewTabReport']) document.getElementById(id)?.classList.toggle('active', page === 'review');
+  for(const id of ['architectureTab','architectureTabArch','architectureTabMetrics','architectureTabQc','architectureTabReport']) document.getElementById(id)?.classList.toggle('active', page === 'architecture');
+  for(const id of ['metricsTab','metricsTabArch','metricsTabMetrics','metricsTabQc','metricsTabReport']) document.getElementById(id)?.classList.toggle('active', page === 'metrics');
+  for(const id of ['qcTab','qcTabArch','qcTabMetrics','qcTabQc','qcTabReport']) document.getElementById(id)?.classList.toggle('active', page === 'qc');
+  for(const id of ['reportTab','reportTabArch','reportTabMetrics','reportTabQc','reportTabReport']) document.getElementById(id)?.classList.toggle('active', page === 'report');
   document.getElementById('architecturePage').classList.toggle('hidden', page !== 'architecture');
   document.getElementById('metricsPage').classList.toggle('hidden', page !== 'metrics');
   document.getElementById('qcPage').classList.toggle('hidden', page !== 'qc');
+  document.getElementById('reportPage').classList.toggle('hidden', page !== 'report');
   appRoot.classList.toggle('arch-mode', page === 'architecture');
-  appRoot.classList.toggle('lab-mode', page === 'metrics');
+  appRoot.classList.toggle('lab-mode', page === 'metrics' || page === 'report');
   appRoot.classList.toggle('qc-mode', page === 'qc');
   if(page === 'architecture') renderArchitectureLab();
   else if(page === 'metrics') renderMetricsAudit();
   else if(page === 'qc') renderDatasetQc();
+  else if(page === 'report') renderReviewReport();
   else resizeOverlay();
 }
 
@@ -1935,6 +3198,8 @@ async function boot(){
     document.getElementById('suggestionNotes').value = suggestionAnn(selectedSuggestionId).notes || '';
     document.getElementById('artifactClass').value = suggestionAnn(selectedSuggestionId).artifact_class || suggestionAnn(selectedSuggestionId).artifactClass || '';
   }
+  renderRunSyncControls();
+  loadGenerationEnvironment();
   setFrame(1);
   routePage();
   renderAll();

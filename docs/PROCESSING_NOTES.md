@@ -106,7 +106,7 @@ High-impact future robustness work:
 - ROI split/merge and footprint brush editing
 - side-by-side comparison of trace denoisers and event models through
   Architecture Lab run manifests
-- Dataset QC summaries for ROI size, trace noise, event density, discovery
+- Process Lab summaries for ROI size, trace noise, event density, discovery
   burden, and evidence-map inspection
 - selected-ROI crop and event-centered filmstrip review for local context
 
