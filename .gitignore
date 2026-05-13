@@ -7,3 +7,5 @@ Inputs/*.zip
 Inputs/*/
 __pycache__/
 *.pyc
+.venv/
+.venv-*/

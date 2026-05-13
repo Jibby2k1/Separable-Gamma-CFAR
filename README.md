@@ -75,58 +75,53 @@ two complementary workflows:
 
 ## Installation
 
-> Requires **Conda** (Anaconda or Miniconda). Python ≥ 3.8. A CUDA GPU is recommended.
+CPU-only setup is the recommended default for onboarding, tests, manifests,
+reports, and the local workbench server. A CUDA GPU is optional for heavier
+grid-search and Kalman-MCC experiments.
 
-1. Create the environment:
+1. Create the CPU environment:
 
 ```bash
-conda env create -f environment.yml
+conda env create -f environment.cpu.yml
 ```
 
 2. Activate it:
 
 ```bash
-conda activate neuron-detection
+conda activate neurobench
 ```
 
-3. (Optional) Update later:
+3. Install development/test dependencies when using pip or an existing Python:
 
 ```bash
-conda env update -f environment.yml --prune
+python -m pip install -r requirements-dev.txt
 ```
 
-### Example `environment.yml`
+4. Run the available tests:
 
-> Save as `environment.yml` in the repo root.
-
-```yaml
-name: neuron-detection
-channels:
-  - pytorch
-  - nvidia
-  - conda-forge
-dependencies:
-  - python=3.10
-  - numpy
-  - pandas
-  - scipy
-  - matplotlib
-  - scikit-image
-  - tifffile
-  - tqdm
-  - psutil
-  - pytorch
-  - pytorch-cuda=12.1  # match your local CUDA driver; or remove if CPU-only
-  - cudatoolkit=12.1   # optional; Conda-forge uses "cuda-toolkit"
-  - pip
-  - pip:
-      - cupy-cuda12x    # optional, for GPU-accelerated Kalman–MCC (pick the right wheel)
+```bash
+python -m pytest -q
 ```
 
-**Notes**
+If `pytest` is not installed in the active environment, use the standard-library
+smoke suite until the development dependencies are installed:
 
-* For **CPU-only**: remove the `pytorch-cuda`/`cudatoolkit` lines and `cupy-cuda12x`.
-* For **different CUDA versions**, change `*-cuda12x` accordingly.
+```bash
+python -m unittest discover -s tests
+```
+
+### Optional GPU Environment
+
+For CUDA/CuPy experimentation, create the optional GPU environment:
+
+```bash
+conda env create -f environment.gpu.yml
+conda activate neurobench-gpu
+```
+
+The existing `environment.yml` is a legacy local GPU snapshot and may contain
+machine-specific pins. Prefer `environment.cpu.yml` or `environment.gpu.yml` for
+new installs.
 
 ---
 
@@ -227,6 +222,13 @@ index page.
 For a concise lab-shareable explanation of the current resting-video algorithm,
 waveforms, event markers, and untuned baseline status, see
 [docs/RESTING_VIDEO_ALGORITHM_BRIEF.md](docs/RESTING_VIDEO_ALGORITHM_BRIEF.md).
+For a CPU-only end-to-end path from a synthetic raw video to QC, pipeline runs,
+reports, sweeps, and exports, see
+[docs/workflows/raw_video_to_report.md](docs/workflows/raw_video_to_report.md).
+For the developer path to add or wire a new Architecture Lab stage, see
+[docs/developer/adding_pipeline_stage.md](docs/developer/adding_pipeline_stage.md).
+For the generated public Python API reference, see
+[docs/API_REFERENCE.md](docs/API_REFERENCE.md).
 
 1. Create a manifest for the TIFF:
 
@@ -245,7 +247,7 @@ python3 tools/create_dataset_manifest.py \
 ```bash
 python3 tools/run_neuron_review_pipeline.py \
   --dataset-manifest Outputs/Manifests/calcium_rest_cropped.dataset.json \
-  --fiji /home/jibby2k1/.local/bin/fiji
+  --fiji /path/to/Fiji.app/ImageJ-linux64
 ```
 
 3. Start the multi-dataset autosave server:

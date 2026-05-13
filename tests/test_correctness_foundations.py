@@ -72,6 +72,19 @@ def test_metric_helpers_accept_canonical_and_legacy_keys():
     assert calculate_truncated_auc([{"fppi": 0.0, "tpr": 0.0}, {"FPPI": 1.0, "TPR": 1.0}], 1.0) == 0.5
 
 
+def test_truncated_auc_preserves_limit_extension_behavior():
+    require_numpy()
+    from evaluation.metrics import calculate_truncated_auc
+
+    points = [
+        {"FPPI": 0.0, "TPR": 0.0},
+        {"FPPI": 0.5, "TPR": 0.5},
+        {"FPPI": 2.0, "TPR": 1.0},
+    ]
+
+    assert calculate_truncated_auc(points, 1.0) == 0.375
+
+
 def test_worker_records_nonzero_canonical_tpr():
     require_numpy()
     import torch
@@ -125,6 +138,11 @@ class CorrectnessFoundationTests(unittest.TestCase):
 
     def test_metric_helpers_accept_canonical_and_legacy_keys(self):
         test_metric_helpers_accept_canonical_and_legacy_keys()
+
+    def test_truncated_auc_preserves_limit_extension_behavior(self):
+        if np is None:
+            self.skipTest("numpy is not installed in this Python environment")
+        test_truncated_auc_preserves_limit_extension_behavior()
 
     def test_worker_records_nonzero_canonical_tpr(self):
         if np is None:

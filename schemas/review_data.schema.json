@@ -4,21 +4,76 @@
   "type": "object",
   "required": ["video", "parameters", "rois"],
   "properties": {
+    "schema_version": {"type": "integer", "minimum": 1},
+    "dataset": {
+      "type": "object",
+      "properties": {
+        "dataset_id": {"type": "string", "minLength": 1},
+        "name": {"type": "string"},
+        "modality": {"type": "string"}
+      },
+      "additionalProperties": true
+    },
     "video": {
       "type": "object",
       "required": ["width", "height", "frames", "framePattern"],
       "properties": {
         "name": {"type": "string"},
-        "width": {"type": "integer"},
-        "height": {"type": "integer"},
-        "frames": {"type": "integer"},
+        "width": {"type": "integer", "minimum": 1},
+        "height": {"type": "integer", "minimum": 1},
+        "frames": {"type": "integer", "minimum": 1},
         "framePattern": {"type": "string"}
       },
       "additionalProperties": true
     },
     "parameters": {"type": "object"},
-    "rois": {"type": "array", "items": {"type": "object"}},
-    "discovery": {"type": "object"}
+    "qc": {"type": "object"},
+    "rois": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "id": {"type": ["integer", "string"]},
+          "area": {"type": "number", "minimum": 0},
+          "centroidX": {"type": "number"},
+          "centroidY": {"type": "number"},
+          "events": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "frame": {"type": "integer", "minimum": 0},
+                "z": {"type": "number"},
+                "amplitude": {"type": "number"}
+              },
+              "additionalProperties": true
+            }
+          }
+        },
+        "additionalProperties": true
+      }
+    },
+    "discovery": {
+      "type": "object",
+      "properties": {
+        "evidenceMaps": {"type": "array", "items": {"type": "object"}},
+        "suggestions": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": {"type": ["integer", "string"]},
+              "centroidX": {"type": "number"},
+              "centroidY": {"type": "number"},
+              "discoveryScore": {"type": "number"},
+              "priorityScore": {"type": "number"}
+            },
+            "additionalProperties": true
+          }
+        }
+      },
+      "additionalProperties": true
+    }
   },
   "additionalProperties": true
 }

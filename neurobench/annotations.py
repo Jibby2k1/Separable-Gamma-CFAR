@@ -7,6 +7,7 @@ from typing import Any, Mapping
 
 ROI_STATE_MAP = {"accept": "accepted", "reject": "rejected", "unsure": "unsure", "": ""}
 EVENT_STATE_MAP = {"accept": "accepted", "reject": "rejected", "unsure": "unsure", "": ""}
+CONFIDENCE_VALUES = {"", "low", "medium", "high"}
 
 
 def default_annotations_v3() -> dict[str, Any]:
@@ -18,6 +19,7 @@ def default_annotations_v3() -> dict[str, Any]:
         "suggestions": {},
         "promotedRois": {},
         "virtualRois": {},
+        "splitMergeDecisions": {},
         "reviewStats": {"sessionStartedAt": None, "lastActionAt": None, "actions": {}},
         "settings": {},
     }
@@ -41,6 +43,8 @@ def migrate_annotations_v3(incoming: Mapping[str, Any] | None) -> dict[str, Any]
         item.setdefault("artifact_class", "")
         item.setdefault("identity_group", "")
         item.setdefault("needs_action", "")
+        item["reason_tags"] = _normalize_string_list(item.get("reason_tags", item.get("reason_codes", [])))
+        item["confidence"] = _normalize_confidence(item.get("confidence", ""))
         migrated["rois"][str(roi_id)] = item
 
     migrated["events"] = {}
@@ -51,12 +55,61 @@ def migrate_annotations_v3(incoming: Mapping[str, Any] | None) -> dict[str, Any]
         item.setdefault("event_state", state)
         item.setdefault("event_type", "")
         item.setdefault("timing_quality", "")
+        item["reason_tags"] = _normalize_string_list(item.get("reason_tags", item.get("reason_codes", [])))
+        item["confidence"] = _normalize_confidence(item.get("confidence", ""))
         migrated["events"][str(event_id)] = item
 
-    migrated["suggestions"] = {str(k): dict(v or {}) for k, v in dict(src.get("suggestions", {})).items()}
+    migrated["suggestions"] = {}
+    for suggestion_id, ann in dict(src.get("suggestions", {})).items():
+        item = dict(ann or {})
+        item["reason_tags"] = _normalize_string_list(item.get("reason_tags", item.get("reason_codes", [])))
+        item["confidence"] = _normalize_confidence(item.get("confidence", ""))
+        migrated["suggestions"][str(suggestion_id)] = item
     migrated["promotedRois"] = dict(src.get("promotedRois", {}))
-    migrated["virtualRois"] = {str(k): dict(v or {}) for k, v in dict(src.get("virtualRois", {})).items()}
+    migrated["virtualRois"] = {}
+    for roi_id, ann in dict(src.get("virtualRois", {})).items():
+        item = dict(ann or {})
+        item["reason_tags"] = _normalize_string_list(item.get("reason_tags", item.get("reason_codes", [])))
+        item["confidence"] = _normalize_confidence(item.get("confidence", ""))
+        migrated["virtualRois"][str(roi_id)] = item
+    migrated["splitMergeDecisions"] = {}
+    for decision_id, ann in dict(src.get("splitMergeDecisions", {})).items():
+        item = _normalize_split_merge_decision(ann)
+        migrated["splitMergeDecisions"][str(decision_id)] = item
     migrated["reviewStats"] = dict(src.get("reviewStats", migrated["reviewStats"]))
     migrated["reviewStats"]["actions"] = dict(migrated["reviewStats"].get("actions", {}))
     migrated["settings"] = dict(src.get("settings", {}))
     return migrated
+
+
+def _normalize_string_list(value: Any) -> list[str]:
+    if value is None or value == "":
+        return []
+    if isinstance(value, str):
+        parts = [part.strip() for part in value.replace(";", ",").split(",")]
+        return [part for part in parts if part]
+    if isinstance(value, (list, tuple, set)):
+        return [str(item).strip() for item in value if str(item).strip()]
+    return [str(value).strip()] if str(value).strip() else []
+
+
+def _normalize_confidence(value: Any) -> str:
+    normalized = str(value or "").strip().lower()
+    return normalized if normalized in CONFIDENCE_VALUES else ""
+
+
+def _normalize_split_merge_decision(value: Any) -> dict[str, Any]:
+    item = dict(value or {})
+    decision_type = str(item.get("decision_type") or item.get("type") or "").strip().lower()
+    item["decision_type"] = decision_type if decision_type in {"split", "merge"} else ""
+    state = str(item.get("decision_state") or item.get("state") or "").strip().lower()
+    item["decision_state"] = state if state in {"", "proposed", "accepted", "rejected", "unsure"} else ""
+    item["source_roi_ids"] = _normalize_string_list(item.get("source_roi_ids", item.get("source_rois", [])))
+    item["target_roi_ids"] = _normalize_string_list(item.get("target_roi_ids", item.get("target_rois", [])))
+    item.setdefault("virtual_roi_id", "")
+    item.setdefault("identity_group", "")
+    item.setdefault("needs_action", "")
+    item["reason_tags"] = _normalize_string_list(item.get("reason_tags", item.get("reason_codes", [])))
+    item["confidence"] = _normalize_confidence(item.get("confidence", ""))
+    item.setdefault("notes", "")
+    return item

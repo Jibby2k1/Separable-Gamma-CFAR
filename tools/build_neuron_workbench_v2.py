@@ -18,9 +18,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from neurobench.annotations import migrate_annotations_v3
-from neurobench.manifests import load_dataset_manifest, load_json, manifest_path
-from neurobench.pipeline_catalog import catalog_as_dict
+from neurobench.workbench.builder import build_workbench, resolve_build_inputs
 
 
 DEFAULT_APP_DIR = PROJECT_ROOT / "Outputs/NeuronReview/calcium_video_2/app"
@@ -570,6 +568,9 @@ const viewerWrap = document.getElementById('viewerWrap');
 const datasetId = data.dataset?.dataset_id || data.video?.name || 'calcium-video';
 const storeKey = `neuron-review-workbench-v3-${datasetId}`;
 const traceCache = new Map();
+const traceEventCache = new Map();
+const TRACE_CACHE_LIMIT = 512;
+const traceCacheStats = {traceHits:0, traceMisses:0, eventHits:0, eventMisses:0, clears:0, lastClearReason:''};
 
 let currentFrame = 1;
 let selectedId = data.rois.length ? data.rois[0].id : null;
@@ -640,6 +641,8 @@ function migrateRoiAnn(ann) {
   out.artifact_class = out.artifact_class || out.artifactClass || '';
   out.identity_group = out.identity_group || '';
   out.needs_action = out.needs_action || '';
+  out.reason_tags = Array.isArray(out.reason_tags) ? out.reason_tags : [];
+  out.confidence = ['low', 'medium', 'high'].includes(out.confidence) ? out.confidence : '';
   return out;
 }
 
@@ -649,6 +652,8 @@ function migrateEventAnn(ann) {
   if(out.event_state && !out.state) out.state = out.event_state === 'accepted' ? 'accept' : out.event_state === 'rejected' ? 'reject' : out.event_state === 'unsure' ? 'unsure' : '';
   out.event_type = out.event_type || '';
   out.timing_quality = out.timing_quality || '';
+  out.reason_tags = Array.isArray(out.reason_tags) ? out.reason_tags : [];
+  out.confidence = ['low', 'medium', 'high'].includes(out.confidence) ? out.confidence : '';
   return out;
 }
 
@@ -739,16 +744,49 @@ function modeledTrace(roi){
   }
   return {baselineTrace, eventTrace, zTrace, sigma};
 }
+function cacheSetBounded(cache, key, value, limit=TRACE_CACHE_LIMIT){
+  if(cache.size >= limit) {
+    const firstKey = cache.keys().next().value;
+    if(firstKey !== undefined) cache.delete(firstKey);
+  }
+  cache.set(key, value);
+  return value;
+}
+function clearTraceCaches(reason='manual'){
+  traceCache.clear();
+  traceEventCache.clear();
+  traceCacheStats.clears++;
+  traceCacheStats.lastClearReason = reason;
+}
+function clearTraceEventCache(reason='event-threshold'){
+  traceEventCache.clear();
+  traceCacheStats.clears++;
+  traceCacheStats.lastClearReason = reason;
+}
 function traceCacheKey(roi){
-  return `${roi.id}|${Number(kalmanGain()).toFixed(4)}|${Number(spikeGain()).toFixed(4)}`;
+  return `${roi.id}|${roi.dffTrace?.length || 0}|${Number(kalmanGain()).toFixed(4)}|${Number(spikeGain()).toFixed(4)}`;
 }
 function modeledTraceCached(roi){
   const key = traceCacheKey(roi);
-  if(!traceCache.has(key)) traceCache.set(key, modeledTrace(roi));
+  if(traceCache.has(key)) {
+    traceCacheStats.traceHits++;
+    return traceCache.get(key);
+  }
+  traceCacheStats.traceMisses++;
+  cacheSetBounded(traceCache, key, modeledTrace(roi));
   return traceCache.get(key);
+}
+function eventCacheKey(roi){
+  return `${traceCacheKey(roi)}|${Number(threshold()).toFixed(4)}`;
 }
 function eventsForRoi(roi){
   if(!roi) return [];
+  const key = eventCacheKey(roi);
+  if(traceEventCache.has(key)) {
+    traceCacheStats.eventHits++;
+    return traceEventCache.get(key);
+  }
+  traceCacheStats.eventMisses++;
   const model = modeledTraceCached(roi);
   const zt = model.zTrace;
   const th = threshold();
@@ -758,7 +796,7 @@ function eventsForRoi(roi){
       out.push({frame:i+1, z:zt[i], amplitude:model.eventTrace[i]});
     }
   }
-  return out;
+  return cacheSetBounded(traceEventCache, key, out);
 }
 function eventFrames(roi){ return eventsForRoi(roi).map(e => e.frame); }
 function eventNearFrame(roi, frame){ return eventFrames(roi).some(f => Math.abs(f - frame) <= 1); }
@@ -1346,7 +1384,8 @@ function initControls(){
     document.getElementById(id).oninput = e => {
       const value = Number(e.target.value);
       setSetting(id, value);
-      if(id === 'kalmanGain' || id === 'spikeGain') traceCache.clear();
+      if(id === 'kalmanGain' || id === 'spikeGain') clearTraceCaches(id);
+      if(id === 'eventThreshold') clearTraceEventCache(id);
       applySettingsToControls();
       renderAll();
     };
@@ -1914,6 +1953,7 @@ HTML_TEMPLATE = """<!doctype html>
       </select>
       <button id="bulkNeedsActionBtn">Apply</button>
       <button id="virtualMergeBtn">Virtual Merge</button>
+      <button id="visualSplitBtn">Visual Split</button>
       <button id="clearMultiSelectBtn">Clear Multi</button>
     </div>
     <h2>Event Review</h2>
@@ -2009,6 +2049,7 @@ HTML_TEMPLATE = """<!doctype html>
         <button id="exportRoiBtn">Export ROI TSV</button>
         <button id="exportEventBtn">Export Event TSV</button>
         <button id="exportSuggestionBtn">Export Discovery TSV</button>
+        <button id="exportSplitMergeBtn">Export Split/Merge TSV</button>
         <button id="exportJsonBtn">Export JSON</button>
       </div>
     </details>
@@ -2144,49 +2185,6 @@ HTML_TEMPLATE = """<!doctype html>
 """
 
 
-def architecture_runs_from_review(data: dict, review_data_path: Path, dataset_id: str) -> dict:
-    return {
-        "schema_version": 1,
-        "dataset_id": dataset_id,
-        "runs": [
-            {
-                "schema_version": 1,
-                "run_id": "current_review_pipeline",
-                "dataset_id": dataset_id,
-                "label": "Current review pipeline",
-                "pipeline": [
-                    {"name": "generate_neuron_review_app"},
-                    {"name": "trace_event_scoring", "params": {"event_threshold_z": data.get("parameters", {}).get("eventZThreshold")}},
-                ],
-                "parameters": data.get("parameters", {}),
-                "execution": {"status": "completed"},
-                "summary": {
-                    "roi_count": len(data.get("rois", [])),
-                    "event_count": sum(len(roi.get("events", [])) for roi in data.get("rois", [])),
-                    "suggestion_count": len(data.get("discovery", {}).get("suggestions", [])),
-                    "frame_count": data.get("video", {}).get("frames"),
-                },
-                "artifacts": {
-                    "review_data": str(review_data_path),
-                    "app_url": "index.html",
-                    "frames": str(review_data_path.parent / "frames"),
-                    "intermediates": [],
-                    "evidence_maps": data.get("discovery", {}).get("evidenceMaps", []),
-                    "roi_summary_tsv": str(review_data_path.parent / "roi_summary.tsv"),
-                    "discovery_suggestions_tsv": str(review_data_path.parent / "discovery_suggestions.tsv"),
-                },
-            }
-        ],
-    }
-
-
-def load_workbench_asset(name: str, fallback: str) -> str:
-    path = ASSET_DIR / name
-    if path.exists():
-        return path.read_text(encoding="utf-8").strip()
-    return fallback.strip()
-
-
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Build the interactive neuron annotation workbench.")
     parser.add_argument("--app-dir", type=Path, default=None)
@@ -2198,55 +2196,26 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> None:
     args = parse_args()
-    dataset_manifest = None
-    if args.dataset_manifest:
-        dataset_manifest = load_dataset_manifest(args.dataset_manifest)
-
-    app_dir = args.app_dir
-    review_data_path = args.review_data
-    architecture_runs_path = args.architecture_runs
-    if dataset_manifest:
-        app_dir = app_dir or manifest_path(dataset_manifest, "app_dir")
-        review_data_path = review_data_path or manifest_path(dataset_manifest, "review_data")
-        architecture_runs_path = architecture_runs_path or manifest_path(dataset_manifest, "architecture_runs")
-
-    app_dir = (app_dir or DEFAULT_APP_DIR).resolve()
-    review_data_path = (review_data_path or DEFAULT_DATA_PATH).resolve()
-    dataset_id = (dataset_manifest or {}).get("dataset_id") or "calcium_video_2"
-
-    data = json.loads(review_data_path.read_text())
-    data["dataset"] = {k: v for k, v in (dataset_manifest or {}).items() if not k.startswith("_")}
-    data["dataset"].setdefault("dataset_id", dataset_id)
-    data["pipelineCatalog"] = catalog_as_dict()
-    if architecture_runs_path and architecture_runs_path.exists():
-        data["architectureRuns"] = load_json(architecture_runs_path)
-    else:
-        data["architectureRuns"] = architecture_runs_from_review(data, review_data_path, dataset_id)
-
-    app_dir.mkdir(parents=True, exist_ok=True)
-    (app_dir / "architecture_runs.json").write_text(
-        json.dumps(data["architectureRuns"], indent=2, sort_keys=True) + "\n"
+    inputs = resolve_build_inputs(
+        app_dir=args.app_dir,
+        review_data=args.review_data,
+        dataset_manifest=args.dataset_manifest,
+        architecture_runs=args.architecture_runs,
+        default_app_dir=DEFAULT_APP_DIR,
+        default_review_data=DEFAULT_DATA_PATH,
+        default_dataset_id="calcium_video_2",
     )
-    (app_dir / "workbench.css").write_text(load_workbench_asset("workbench.css", CSS) + "\n")
-    (app_dir / "workbench.js").write_text(load_workbench_asset("workbench.js", JS) + "\n")
-    html = HTML_TEMPLATE.format(
-        dataset_id=dataset_id,
-        frames=data["video"]["frames"],
-        data_json=json.dumps(data, separators=(",", ":")).replace("</script>", "<\\/script>"),
+    paths = build_workbench(
+        app_dir=inputs["app_dir"],
+        review_data_path=inputs["review_data_path"],
+        dataset_id=inputs["dataset_id"],
+        html_template=HTML_TEMPLATE,
+        dataset_manifest=inputs["dataset_manifest"],
+        architecture_runs_path=inputs["architecture_runs_path"],
+        css_fallback=CSS,
+        js_fallback=JS,
     )
-    (app_dir / "index.html").write_text(html)
-    annotations_path = app_dir / "annotations.json"
-    if not annotations_path.exists():
-        annotations_path.write_text(
-            json.dumps(migrate_annotations_v3(None), indent=2, sort_keys=True)
-            + "\n"
-        )
-    else:
-        annotations_path.write_text(
-            json.dumps(migrate_annotations_v3(load_json(annotations_path)), indent=2, sort_keys=True)
-            + "\n"
-        )
-    print(f"Wrote workbench to {app_dir / 'index.html'}")
+    print(f"Wrote workbench to {paths['index']}")
 
 
 if __name__ == "__main__":

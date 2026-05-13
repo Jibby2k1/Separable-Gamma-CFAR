@@ -1,0 +1,95 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Neurobench Export Bundle",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "export_bundle_id",
+    "dataset_id",
+    "run_ids",
+    "created_at",
+    "selection_policy",
+    "alignment_status",
+    "files",
+    "provenance"
+  ],
+  "properties": {
+    "schema_version": {"type": "integer", "const": 1},
+    "export_bundle_id": {"type": "string", "minLength": 1},
+    "dataset_id": {"type": "string", "minLength": 1},
+    "run_ids": {
+      "type": "array",
+      "items": {"type": "string", "minLength": 1}
+    },
+    "created_at": {"type": "string", "minLength": 1},
+    "profile": {"type": "string"},
+    "selection_policy": {
+      "type": "object",
+      "required": ["name"],
+      "properties": {
+        "name": {"type": "string", "minLength": 1},
+        "description": {"type": "string"},
+        "include_rois": {"type": "string"},
+        "include_events": {"type": "string"},
+        "review_state_required": {
+          "type": "array",
+          "items": {"type": "string"}
+        }
+      },
+      "additionalProperties": true
+    },
+    "alignment_status": {
+      "type": "string",
+      "enum": ["not_provided", "provided_unvalidated", "validated", "failed"]
+    },
+    "alignment": {
+      "type": "object",
+      "properties": {
+        "status": {"type": "string"},
+        "report_path": {"type": "string"},
+        "frame_rate_hz": {"type": "number"},
+        "timebase": {"type": "string"}
+      },
+      "additionalProperties": true
+    },
+    "files": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["kind", "path"],
+        "properties": {
+          "kind": {"type": "string", "minLength": 1},
+          "path": {"type": "string", "minLength": 1},
+          "format": {"type": "string"},
+          "sha256": {"type": "string"},
+          "rows": {"type": "integer", "minimum": 0},
+          "description": {"type": "string"}
+        },
+        "additionalProperties": true
+      }
+    },
+    "checksums": {
+      "type": "object",
+      "additionalProperties": {"type": "string"}
+    },
+    "warnings": {
+      "type": "array",
+      "items": {"type": "string"}
+    },
+    "provenance": {
+      "type": "object",
+      "properties": {
+        "review_data": {"type": "string"},
+        "annotations": {"type": "string"},
+        "pipeline_run_paths": {
+          "type": "array",
+          "items": {"type": "string"}
+        },
+        "metrics_report": {"type": "string"}
+      },
+      "additionalProperties": true
+    },
+    "extras": {"type": "object"}
+  },
+  "additionalProperties": true
+}

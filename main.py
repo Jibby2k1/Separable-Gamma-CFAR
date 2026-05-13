@@ -22,6 +22,7 @@ from data_loader import load_video, parse_ground_truth_csv
 from worker import process_full_task_for_worker
 from evaluation import analysis
 from reporting import generators, plotters
+from reporting.grid_search_summary import family_tag, group_results_by_family, write_ranked_model_summaries
 from core.filters import get_feature_map
 from core.detection import CFAR
 from core.pipelines import run_single_stage, run_two_stage  # NEW
@@ -205,119 +206,6 @@ def main():
     logging.info("--- Analyzing Grid Search Results ---")
     generators.save_full_results_csv(all_results, config.BASE_OUTPUT_DIR)
 
-    from collections import defaultdict
-    by_family = defaultdict(list)
-    for r in all_results:
-        ftype = r['params']['varied_param']['filter_type']
-        by_family[ftype].append(r)
-
-    def tag(ft: str) -> str:
-        return {"gamma": "Gamma", "kalman_mcc": "KalmanMCC"}.get(ft, ft)
-
-    # Per-family reports
-    for ftype, fam in by_family.items():
-        fam_dir = config.BASE_OUTPUT_DIR / tag(ftype)
-        fam_dir.mkdir(exist_ok=True)
-        logging.info(f"=== Family: {tag(ftype)} ({len(fam)} configs) ===")
-
-        top_models = analysis.find_top_k_models(fam, k=config.TOP_K_MODELS_TO_REPORT)
-        balanced   = analysis.find_balanced_operating_points(
-            fam, k=config.TOP_K_MODELS_TO_REPORT,
-            fppi_normalization_max=config.TRUNCATION_FPPI_LIMIT
-        )
-
-        generators.save_top_models_summary(top_models, fam_dir)
-        generators.save_balanced_summary(balanced, fam_dir)
-
-        # full suites per family
-        generate_reports_for_model_list(top_models,   f"{tag(ftype)}_Top_100_TPR", video_np, device, neuron_gt_data, vessel_gt_data, fam_dir)
-        generate_reports_for_model_list(balanced,     f"{tag(ftype)}_Top_Balanced", video_np, device, neuron_gt_data, vessel_gt_data, fam_dir)
-
-        # FROC + Youden per family
-        plotters.plot_range_truncated_froc(fam, top_models, config.TRUNCATION_FPPI_LIMIT, fam_dir)
-        if hasattr(plotters, "plot_youden_vs_fppi"):
-            plotters.plot_youden_vs_fppi(balanced, config.TRUNCATION_FPPI_LIMIT, fam_dir)
-
-        # Sensitivity: Gamma(t_decay,s_decay) or Kalman(sigma,mu)
-        if ftype == "gamma":
-            t_vals = sorted({p['params']['varied_param'].get('t_decay') for p in fam if 't_decay' in p['params']['varied_param']})
-            s_vals = sorted({p['params']['varied_param'].get('s_decay') for p in fam if 's_decay' in p['params']['varied_param']})
-            if len(t_vals) > 1 or len(s_vals) > 1:
-                plotters.generate_sensitivity_plots(
-                    results=fam, x_vals=t_vals, y_vals=s_vals,
-                    output_dir=fam_dir, fppi_limit=config.TRUNCATION_FPPI_LIMIT,
-                    x_name='t_decay', y_name='s_decay', filter_type="Gamma ST Filter"
-                )
-        elif ftype == "kalman_mcc":
-            sig_vals = sorted({p['params']['varied_param']['sigma'] for p in fam})
-            mu_vals  = sorted({p['params']['varied_param']['mu'] for p in fam})
-            if len(sig_vals) > 1 or len(mu_vals) > 1:
-                plotters.generate_sensitivity_plots(
-                    results=fam, x_vals=sig_vals, y_vals=mu_vals,
-                    output_dir=fam_dir, fppi_limit=config.TRUNCATION_FPPI_LIMIT,
-                    x_name='sigma', y_name='mu', filter_type="Kalman–MCC"
-                )
-
-        # --- Gamma: diagnostics for #1 balanced model ---
-        logging.info("--- Gamma: diagnostics for #1 balanced model ---")
-        if balanced:
-            top_params = balanced[0]["params"]
-
-            if top_params["varied_param"]["filter_type"] != "gamma":
-                logging.warning("Top balanced model is not a Gamma configuration; skipping Gamma diagnostics.")
-            else:
-                arch = top_params.get("arch", "single")
-
-                # Recompute intermediates/z ONCE via the GPU pipelines (no thresholding for analysis)
-                if arch == "single":
-                    out = run_single_stage(video_np, {
-                        "st1":     top_params["st1"],
-                        "cfar1":   top_params["cfar1_params"],
-                        "z_thresh": 0.0,  # we want raw z1 for plots
-                    })
-                    gamma_np = out["features1"]   # ST1 output
-                    cfar_np  = out["z1"]          # z1 is the CFAR z-map for single-stage
-                else:
-                    out = run_two_stage(video_np, {
-                        "st1":     top_params["st1"],
-                        "cfar1":   top_params["cfar1_params"],
-                        "st2":     top_params["st2"],
-                        "cfar2":   top_params["cfar2_params"],
-                        "z_thresh": 0.0,           # we want raw z2 for plots
-                    })
-                    gamma_np = out["features1"]   # keep ST1 as “middle-stage” for consistency
-                    cfar_np  = out["z2"]          # z2 is the final CFAR z-map for two-stage
-
-                # Diagnostics directory
-                diag_dir = fam_dir / "Diagnostics"
-                diag_dir.mkdir(exist_ok=True)
-
-                # Generate stage-wise samples & plots (robust histogram/power functions already patched)
-                analysis.generate_and_save_stage_wise_samples(video_np, gamma_np, cfar_np, neuron_gt_data, diag_dir)
-                plotters.plot_stage_wise_histograms(diag_dir)
-                plotters.plot_frame_wise_power(video_np, neuron_gt_data, "Raw_Video", diag_dir)
-                plotters.plot_frame_wise_power(gamma_np, neuron_gt_data, tag(ftype), diag_dir)
-                plotters.plot_frame_wise_power(cfar_np, neuron_gt_data, "CFAR_Z-Score", diag_dir)
-        else:
-            logging.warning("No balanced models available; skipping Gamma diagnostics.")
-
-    # Combined “true best across both families”
-    combined_dir = config.BASE_OUTPUT_DIR / "Combined"
-    combined_dir.mkdir(exist_ok=True)
-    top_all = analysis.find_top_k_models(all_results, k=config.TOP_K_MODELS_TO_REPORT)
-    bal_all = analysis.find_balanced_operating_points(
-        all_results, k=config.TOP_K_MODELS_TO_REPORT,
-        fppi_normalization_max=config.TRUNCATION_FPPI_LIMIT
-    )
-    generators.save_top_models_summary(top_all, combined_dir)
-    generators.save_balanced_summary(bal_all, combined_dir)
-    generate_reports_for_model_list(top_all, "Combined_Top_100_TPR", video_np, device, neuron_gt_data, vessel_gt_data, combined_dir)
-    generate_reports_for_model_list(bal_all, "Combined_Top_Balanced", video_np, device, neuron_gt_data, vessel_gt_data, combined_dir)
-    plotters.plot_range_truncated_froc(all_results, top_all, config.TRUNCATION_FPPI_LIMIT, combined_dir)
-    if hasattr(plotters, "plot_youden_vs_fppi"):
-        plotters.plot_youden_vs_fppi(bal_all, config.TRUNCATION_FPPI_LIMIT, combined_dir)
-
-
     # --- 4. Global static figures (once) ---
     logging.info("--- Generating global static figures ---")
     plotters.plot_pipeline_schematic(config.BASE_OUTPUT_DIR / "fig_pipeline.png")
@@ -350,56 +238,34 @@ def main():
         )
 
     # --- 5. Family-wise + combined analysis (reports + figs) ---
-    from collections import defaultdict
-
-    def tag(ft: str) -> str:
-        return {"gamma": "Gamma", "kalman_mcc": "KalmanMCC"}.get(ft, ft)
-
     # Bucket results by preprocessor family
-    by_family = defaultdict(list)
-    for r in all_results:
-        ftype = r["params"]["varied_param"]["filter_type"]
-        by_family[ftype].append(r)
+    by_family = group_results_by_family(all_results)
 
     for ftype, fam in by_family.items():
-        fam_name = tag(ftype)
+        fam_name = family_tag(ftype)
         fam_dir = config.BASE_OUTPUT_DIR / fam_name
-        fam_dir.mkdir(exist_ok=True)
         logging.info(f"=== Family: {fam_name} ({len(fam)} configs) ===")
 
-        # Rank within this family
-        top_models = analysis.find_top_k_models(fam, k=config.TOP_K_MODELS_TO_REPORT)
-        balanced   = analysis.find_balanced_operating_points(
-            fam, k=config.TOP_K_MODELS_TO_REPORT,
-            fppi_normalization_max=config.TRUNCATION_FPPI_LIMIT
+        summaries = write_ranked_model_summaries(
+            results=fam,
+            output_dir=fam_dir,
+            category_prefix=fam_name,
+            analysis_module=analysis,
+            generators_module=generators,
+            plotters_module=plotters,
+            report_callback=lambda models, category, out_dir: generate_reports_for_model_list(
+                model_list=models,
+                report_category_name=category,
+                video_np=video_np,
+                device=device,
+                neuron_gt_data=neuron_gt_data,
+                vessel_gt_data=vessel_gt_data,
+                base_output_dir=out_dir,
+            ),
+            top_k=config.TOP_K_MODELS_TO_REPORT,
+            fppi_limit=config.TRUNCATION_FPPI_LIMIT,
         )
-
-        # Save CSVs and full report suites (inside family dir)
-        generators.save_top_models_summary(top_models, fam_dir)
-        generators.save_balanced_summary(balanced, fam_dir)
-        generate_reports_for_model_list(
-            model_list=top_models,
-            report_category_name=f"{fam_name}_Top_100_TPR",
-            video_np=video_np, device=device,
-            neuron_gt_data=neuron_gt_data, vessel_gt_data=vessel_gt_data,
-            base_output_dir=fam_dir,
-        )
-        generate_reports_for_model_list(
-            model_list=balanced,
-            report_category_name=f"{fam_name}_Top_Balanced",
-            video_np=video_np, device=device,
-            neuron_gt_data=neuron_gt_data, vessel_gt_data=vessel_gt_data,
-            base_output_dir=fam_dir,
-        )
-
-        # Family FROC + Youden
-        plotters.plot_range_truncated_froc(
-            fam, top_models, config.TRUNCATION_FPPI_LIMIT, fam_dir
-        )
-        if hasattr(plotters, "plot_youden_vs_fppi"):
-            plotters.plot_youden_vs_fppi(
-                balanced, config.TRUNCATION_FPPI_LIMIT, fam_dir
-            )
+        balanced = summaries["balanced"]
 
         # Family sensitivity heatmaps
         if ftype == "gamma":
@@ -489,28 +355,33 @@ def main():
 
     # Combined “true best” across both families
     combined_dir = config.BASE_OUTPUT_DIR / "Combined"
-    combined_dir.mkdir(exist_ok=True)
-    top_all = analysis.find_top_k_models(all_results, k=config.TOP_K_MODELS_TO_REPORT)
-    bal_all = analysis.find_balanced_operating_points(
-        all_results, k=config.TOP_K_MODELS_TO_REPORT,
-        fppi_normalization_max=config.TRUNCATION_FPPI_LIMIT
+    write_ranked_model_summaries(
+        results=all_results,
+        output_dir=combined_dir,
+        category_prefix="Combined",
+        analysis_module=analysis,
+        generators_module=generators,
+        plotters_module=plotters,
+        report_callback=lambda models, category, out_dir: generate_reports_for_model_list(
+            models,
+            category,
+            video_np,
+            device,
+            neuron_gt_data,
+            vessel_gt_data,
+            out_dir,
+        ),
+        top_k=config.TOP_K_MODELS_TO_REPORT,
+        fppi_limit=config.TRUNCATION_FPPI_LIMIT,
     )
-    generators.save_top_models_summary(top_all, combined_dir)
-    generators.save_balanced_summary(bal_all, combined_dir)
-    generate_reports_for_model_list(top_all, "Combined_Top_100_TPR", video_np, device, neuron_gt_data, vessel_gt_data, combined_dir)
-    generate_reports_for_model_list(bal_all, "Combined_Top_Balanced",   video_np, device, neuron_gt_data, vessel_gt_data, combined_dir)
-    plotters.plot_range_truncated_froc(all_results, top_all, config.TRUNCATION_FPPI_LIMIT, combined_dir)
-    if hasattr(plotters, "plot_youden_vs_fppi"):
-        plotters.plot_youden_vs_fppi(bal_all, config.TRUNCATION_FPPI_LIMIT, combined_dir)
-
     # === After the existing combined summaries/plots are written ===
     restrictive_top = run_restrictive_id_coverage_experiment(
-    all_results=all_results,
-    video_np=video_np,
-    neuron_gt_data=neuron_gt_data,
-    device=device,
-    base_output_dir=combined_dir,
-    top_k=config.TOP_K_MODELS_TO_REPORT,  # reuse your existing K
+        all_results=all_results,
+        video_np=video_np,
+        neuron_gt_data=neuron_gt_data,
+        device=device,
+        base_output_dir=combined_dir,
+        top_k=config.TOP_K_MODELS_TO_REPORT,  # reuse your existing K
     )
 
     # Generate the SAME detailed diagnostics you get for other leaderboards

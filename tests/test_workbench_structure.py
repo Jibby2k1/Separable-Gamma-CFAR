@@ -31,6 +31,8 @@ class WorkbenchStructureTests(unittest.TestCase):
         self.assertIn('id="generationBackend"', html)
         self.assertIn('id="previewRunViewBtn"', html)
         self.assertIn('id="unlockGenerationBtn"', html)
+        self.assertIn('id="visualSplitBtn"', html)
+        self.assertIn('id="exportSplitMergeBtn"', html)
         self.assertIn('href="#process"', html)
         self.assertIn("Process Lab", html)
         self.assertIn("Generate View", html)
@@ -82,6 +84,31 @@ class WorkbenchStructureTests(unittest.TestCase):
         self.assertIn("generate-preview", js)
         self.assertIn("pollGenerationJob", js)
         self.assertIn("backendReadiness", js)
+        self.assertIn("traceEventCache", js)
+        self.assertIn("TRACE_CACHE_LIMIT", js)
+        self.assertIn("cacheSetBounded", js)
+        self.assertIn("clearTraceCaches", js)
+        self.assertIn("clearTraceEventCache", js)
+        self.assertIn("eventCacheKey", js)
+        self.assertIn("traceCacheStats", js)
+        self.assertIn("if(id === 'eventThreshold') clearTraceEventCache(id);", js)
+        self.assertIn("if(id === 'kalmanGain' || id === 'spikeGain') clearTraceCaches(id);", js)
+        self.assertIn("splitMergeDecisions", js)
+        self.assertIn("migrateSplitMergeDecision", js)
+        self.assertIn("createVisualSplitDecision", js)
+        self.assertIn("drawSplitMergeGuides", js)
+        self.assertIn("exportRows('splitMerge')", js)
+
+    def test_legacy_builder_embedded_js_has_trace_cache_hooks(self):
+        from pathlib import Path
+
+        js = Path("tools/build_neuron_workbench_v2.py").read_text(encoding="utf-8")
+        self.assertIn("traceEventCache", js)
+        self.assertIn("TRACE_CACHE_LIMIT", js)
+        self.assertIn("clearTraceCaches", js)
+        self.assertIn("clearTraceEventCache", js)
+        self.assertIn("eventCacheKey", js)
+        self.assertIn("traceCacheStats", js)
 
     def test_intermediate_export_tool_exposes_manifest_fields(self):
         from pathlib import Path

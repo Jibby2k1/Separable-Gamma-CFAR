@@ -1,0 +1,21 @@
+name: neurobench
+channels:
+  - pytorch
+  - conda-forge
+dependencies:
+  - python=3.10
+  - numpy
+  - scipy
+  - pandas
+  - matplotlib
+  - scikit-image
+  - pillow
+  - imageio
+  - tifffile
+  - tqdm
+  - psutil
+  - pyyaml
+  - jsonschema
+  - pytest
+  - pytorch
+  - cpuonly

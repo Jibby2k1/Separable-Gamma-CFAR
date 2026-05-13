@@ -18,6 +18,8 @@
           "artifact_class": {"type": "string"},
           "identity_group": {"type": "string"},
           "needs_action": {"type": "string"},
+          "reason_tags": {"type": "array", "items": {"type": "string"}},
+          "confidence": {"type": "string", "enum": ["", "low", "medium", "high"]},
           "deleted": {"type": "boolean"},
           "notes": {"type": "string"}
         },
@@ -32,12 +34,26 @@
           "state": {"type": "string"},
           "event_state": {"type": "string", "enum": ["", "accepted", "rejected", "unsure"]},
           "event_type": {"type": "string"},
-          "timing_quality": {"type": "string", "enum": ["", "clear_frame", "ambiguous", "slow_transient"]}
+          "timing_quality": {"type": "string", "enum": ["", "clear_frame", "ambiguous", "slow_transient"]},
+          "reason_tags": {"type": "array", "items": {"type": "string"}},
+          "confidence": {"type": "string", "enum": ["", "low", "medium", "high"]}
         },
         "additionalProperties": true
       }
     },
-    "suggestions": {"type": "object"},
+    "suggestions": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "properties": {
+          "state": {"type": "string"},
+          "reason_tags": {"type": "array", "items": {"type": "string"}},
+          "confidence": {"type": "string", "enum": ["", "low", "medium", "high"]},
+          "notes": {"type": "string"}
+        },
+        "additionalProperties": true
+      }
+    },
     "promotedRois": {"type": "object"},
     "virtualRois": {
       "type": "object",
@@ -52,7 +68,31 @@
           "trace_quality": {"type": "string"},
           "control_ready": {"type": "string"},
           "artifact_class": {"type": "string"},
+          "reason_tags": {"type": "array", "items": {"type": "string"}},
+          "confidence": {"type": "string", "enum": ["", "low", "medium", "high"]},
           "notes": {"type": "string"}
+        },
+        "additionalProperties": true
+      }
+    },
+    "splitMergeDecisions": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "required": ["decision_type", "source_roi_ids"],
+        "properties": {
+          "id": {"type": "string"},
+          "decision_type": {"type": "string", "enum": ["", "split", "merge"]},
+          "decision_state": {"type": "string", "enum": ["", "proposed", "accepted", "rejected", "unsure"]},
+          "source_roi_ids": {"type": "array", "items": {"type": ["integer", "string"]}},
+          "target_roi_ids": {"type": "array", "items": {"type": ["integer", "string"]}},
+          "virtual_roi_id": {"type": "string"},
+          "identity_group": {"type": "string"},
+          "needs_action": {"type": "string"},
+          "reason_tags": {"type": "array", "items": {"type": "string"}},
+          "confidence": {"type": "string", "enum": ["", "low", "medium", "high"]},
+          "notes": {"type": "string"},
+          "createdAt": {"type": "string"}
         },
         "additionalProperties": true
       }

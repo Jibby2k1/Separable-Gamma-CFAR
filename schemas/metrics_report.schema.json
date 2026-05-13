@@ -1,0 +1,63 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Neurobench Metrics Report",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "metrics_report_id",
+    "dataset_id",
+    "run_ids",
+    "created_at",
+    "metrics",
+    "provenance"
+  ],
+  "properties": {
+    "schema_version": {"type": "integer", "const": 1},
+    "metrics_report_id": {"type": "string", "minLength": 1},
+    "dataset_id": {"type": "string", "minLength": 1},
+    "run_ids": {
+      "type": "array",
+      "items": {"type": "string", "minLength": 1}
+    },
+    "created_at": {"type": "string", "minLength": 1},
+    "metrics": {
+      "type": "object",
+      "properties": {
+        "pixel_level": {"type": "object"},
+        "object_level": {"type": "object"},
+        "event_level": {"type": "object"},
+        "annotation": {"type": "object"},
+        "runtime": {"type": "object"}
+      },
+      "additionalProperties": true
+    },
+    "figures": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["path"],
+        "properties": {
+          "path": {"type": "string", "minLength": 1},
+          "caption": {"type": "string"},
+          "kind": {"type": "string"}
+        },
+        "additionalProperties": true
+      }
+    },
+    "warnings": {"type": "array", "items": {"type": "string"}},
+    "provenance": {
+      "type": "object",
+      "properties": {
+        "pipeline_run_paths": {"type": "array", "items": {"type": "string"}},
+        "pipeline_spec_paths": {"type": "array", "items": {"type": "string"}},
+        "annotation_paths": {"type": "array", "items": {"type": "string"}},
+        "artifact_paths": {"type": "array", "items": {"type": "string"}},
+        "code": {"type": "object"},
+        "environment": {"type": "object"}
+      },
+      "additionalProperties": true
+    },
+    "extras": {"type": "object"}
+  },
+  "additionalProperties": true
+}

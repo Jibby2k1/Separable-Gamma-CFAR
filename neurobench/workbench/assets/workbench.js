@@ -21,6 +21,9 @@ const viewerWrap = document.getElementById('viewerWrap');
 const datasetId = data.dataset?.dataset_id || data.video?.name || 'calcium-video';
 const storeKey = `neuron-review-workbench-v3-${datasetId}`;
 const traceCache = new Map();
+const traceEventCache = new Map();
+const TRACE_CACHE_LIMIT = 512;
+const traceCacheStats = {traceHits:0, traceMisses:0, eventHits:0, eventMisses:0, clears:0, lastClearReason:''};
 
 let currentFrame = 1;
 let selectedId = data.rois.length ? data.rois[0].id : null;
@@ -53,6 +56,7 @@ function defaultAnnotations() {
     suggestions: {},
     promotedRois: {},
     virtualRois: {},
+    splitMergeDecisions: {},
     runs: {},
     reviewStats: {
       sessionStartedAt: new Date().toISOString(),
@@ -98,6 +102,8 @@ function mergeAnnotations(incoming) {
   annotations.suggestions = Object.assign({}, incoming?.suggestions || {});
   annotations.promotedRois = Object.assign({}, incoming?.promotedRois || {});
   annotations.virtualRois = Object.assign({}, incoming?.virtualRois || {});
+  annotations.splitMergeDecisions = {};
+  for(const [id, ann] of Object.entries(incoming?.splitMergeDecisions || {})) annotations.splitMergeDecisions[id] = migrateSplitMergeDecision(ann);
   annotations.runs = {};
   for(const [runId, bucket] of Object.entries(incoming?.runs || {})) annotations.runs[runId] = migrateRunBucket(bucket);
   annotations.reviewStats = Object.assign(defaultAnnotations().reviewStats, incoming?.reviewStats || {});
@@ -111,10 +117,12 @@ function migrateRunBucket(bucket) {
     events: {},
     suggestions: Object.assign({}, bucket?.suggestions || {}),
     promotedRois: Object.assign({}, bucket?.promotedRois || {}),
-    virtualRois: Object.assign({}, bucket?.virtualRois || {})
+    virtualRois: Object.assign({}, bucket?.virtualRois || {}),
+    splitMergeDecisions: {}
   };
   for(const [id, ann] of Object.entries(bucket?.rois || {})) out.rois[id] = migrateRoiAnn(ann);
   for(const [id, ann] of Object.entries(bucket?.events || {})) out.events[id] = migrateEventAnn(ann);
+  for(const [id, ann] of Object.entries(bucket?.splitMergeDecisions || {})) out.splitMergeDecisions[id] = migrateSplitMergeDecision(ann);
   return out;
 }
 
@@ -128,6 +136,23 @@ function migrateRoiAnn(ann) {
   out.identity_group = out.identity_group || '';
   out.needs_action = out.needs_action || '';
   return out;
+}
+
+function migrateSplitMergeDecision(ann) {
+  const out = Object.assign({id:'', decision_type:'', decision_state:'', source_roi_ids:[], target_roi_ids:[], virtual_roi_id:'', identity_group:'', needs_action:'', reason_tags:[], confidence:'', notes:''}, ann || {});
+  out.decision_type = ['split','merge'].includes(String(out.decision_type || out.type || '').toLowerCase()) ? String(out.decision_type || out.type).toLowerCase() : '';
+  out.decision_state = ['proposed','accepted','rejected','unsure'].includes(String(out.decision_state || out.state || '').toLowerCase()) ? String(out.decision_state || out.state).toLowerCase() : '';
+  out.source_roi_ids = normalizeIdList(out.source_roi_ids || out.source_rois);
+  out.target_roi_ids = normalizeIdList(out.target_roi_ids || out.target_rois);
+  out.reason_tags = normalizeIdList(out.reason_tags || out.reason_codes);
+  out.confidence = ['low','medium','high'].includes(String(out.confidence || '').toLowerCase()) ? String(out.confidence).toLowerCase() : '';
+  return out;
+}
+
+function normalizeIdList(value) {
+  if(value == null || value === '') return [];
+  if(Array.isArray(value)) return value.map(v => String(v).trim()).filter(Boolean);
+  return String(value).split(/[;,]/).map(v => v.trim()).filter(Boolean);
 }
 
 function migrateEventAnn(ann) {
@@ -147,7 +172,8 @@ function runAnnotationSnapshot(){
     events: Object.assign({}, annotations.events || {}),
     suggestions: Object.assign({}, annotations.suggestions || {}),
     promotedRois: Object.assign({}, annotations.promotedRois || {}),
-    virtualRois: Object.assign({}, annotations.virtualRois || {})
+    virtualRois: Object.assign({}, annotations.virtualRois || {}),
+    splitMergeDecisions: Object.assign({}, annotations.splitMergeDecisions || {})
   };
 }
 function captureActiveRunAnnotations(){
@@ -156,14 +182,15 @@ function captureActiveRunAnnotations(){
 }
 function materializeRunAnnotations(runId){
   annotations.runs = annotations.runs || {};
-  const hasLegacy = Object.keys(annotations.rois || {}).length || Object.keys(annotations.events || {}).length || Object.keys(annotations.suggestions || {}).length || Object.keys(annotations.promotedRois || {}).length;
+  const hasLegacy = Object.keys(annotations.rois || {}).length || Object.keys(annotations.events || {}).length || Object.keys(annotations.suggestions || {}).length || Object.keys(annotations.promotedRois || {}).length || Object.keys(annotations.virtualRois || {}).length || Object.keys(annotations.splitMergeDecisions || {}).length;
   if(!annotations.runs[runId] && hasLegacy && runId === baselineRunId()) annotations.runs[runId] = migrateRunBucket(runAnnotationSnapshot());
-  const bucket = annotations.runs[runId] || {rois:{}, events:{}, suggestions:{}, promotedRois:{}, virtualRois:{}};
+  const bucket = annotations.runs[runId] || {rois:{}, events:{}, suggestions:{}, promotedRois:{}, virtualRois:{}, splitMergeDecisions:{}};
   annotations.rois = Object.assign({}, bucket.rois || {});
   annotations.events = Object.assign({}, bucket.events || {});
   annotations.suggestions = Object.assign({}, bucket.suggestions || {});
   annotations.promotedRois = Object.assign({}, bucket.promotedRois || {});
   annotations.virtualRois = Object.assign({}, bucket.virtualRois || {});
+  annotations.splitMergeDecisions = Object.assign({}, bucket.splitMergeDecisions || {});
 }
 function ensureRunAnnotationScope(){
   if(!setting('activeRunId')) annotations.settings.activeRunId = baselineRunId();
@@ -395,16 +422,49 @@ function modeledTrace(roi){
   }
   return {baselineTrace, eventTrace, zTrace, sigma};
 }
+function cacheSetBounded(cache, key, value, limit=TRACE_CACHE_LIMIT){
+  if(cache.size >= limit) {
+    const firstKey = cache.keys().next().value;
+    if(firstKey !== undefined) cache.delete(firstKey);
+  }
+  cache.set(key, value);
+  return value;
+}
+function clearTraceCaches(reason='manual'){
+  traceCache.clear();
+  traceEventCache.clear();
+  traceCacheStats.clears++;
+  traceCacheStats.lastClearReason = reason;
+}
+function clearTraceEventCache(reason='event-threshold'){
+  traceEventCache.clear();
+  traceCacheStats.clears++;
+  traceCacheStats.lastClearReason = reason;
+}
 function traceCacheKey(roi){
-  return `${roi.id}|${Number(kalmanGain()).toFixed(4)}|${Number(spikeGain()).toFixed(4)}`;
+  return `${roi.id}|${roi.dffTrace?.length || 0}|${Number(kalmanGain()).toFixed(4)}|${Number(spikeGain()).toFixed(4)}`;
 }
 function modeledTraceCached(roi){
   const key = traceCacheKey(roi);
-  if(!traceCache.has(key)) traceCache.set(key, modeledTrace(roi));
+  if(traceCache.has(key)) {
+    traceCacheStats.traceHits++;
+    return traceCache.get(key);
+  }
+  traceCacheStats.traceMisses++;
+  cacheSetBounded(traceCache, key, modeledTrace(roi));
   return traceCache.get(key);
+}
+function eventCacheKey(roi){
+  return `${traceCacheKey(roi)}|${Number(threshold()).toFixed(4)}`;
 }
 function eventsForRoi(roi){
   if(!roi) return [];
+  const key = eventCacheKey(roi);
+  if(traceEventCache.has(key)) {
+    traceCacheStats.eventHits++;
+    return traceEventCache.get(key);
+  }
+  traceCacheStats.eventMisses++;
   const model = modeledTraceCached(roi);
   const zt = model.zTrace;
   const th = threshold();
@@ -414,10 +474,11 @@ function eventsForRoi(roi){
       out.push({frame:i+1, z:zt[i], amplitude:model.eventTrace[i]});
     }
   }
-  return out;
+  return cacheSetBounded(traceEventCache, key, out);
 }
 function eventFrames(roi){ return eventsForRoi(roi).map(e => e.frame); }
 function eventNearFrame(roi, frame){ return eventFrames(roi).some(f => Math.abs(f - frame) <= 1); }
+function roiById(id){ return data.rois.find(r => String(r.id) === String(id)) || null; }
 
 function roiQualityScore(roi) {
   return scoreValue(roi, 'priorityScore', roi.peakScore / Math.max(0.04, roi.noiseSigma) + eventsForRoi(roi).length * 0.4);
@@ -731,7 +792,7 @@ function applyDisplaySettings() {
 }
 
 function refreshReviewAfterDataChange(){
-  traceCache.clear();
+  clearTraceCaches('review-data-change');
   slider.max = data.video.frames;
   if(currentFrame > data.video.frames) currentFrame = data.video.frames;
   selectedId = data.rois?.[0]?.id || null;
@@ -974,6 +1035,7 @@ function drawOverlay(){
       ctx.fillText(String(roi.id), roi.centroidX + 5, roi.centroidY - 5);
     }
   }
+  if(showRois) drawSplitMergeGuides(showLabels, opacity);
   if(showSuggestions){
     for(const s of visibleSuggestions()){
       const ann = suggestionAnn(s.id);
@@ -1000,6 +1062,47 @@ function drawOverlay(){
       }
     }
   }
+}
+
+function drawSplitMergeGuides(showLabels, opacity){
+  const virtuals = Object.values(annotations.virtualRois || {});
+  const decisions = Object.values(annotations.splitMergeDecisions || {});
+  for(const virtual of virtuals){
+    if(!virtual.points?.length) continue;
+    ctx.globalAlpha = Math.max(0.28, opacity * 0.55);
+    ctx.fillStyle = '#14b8a6';
+    for(const p of virtual.points) ctx.fillRect(p[0], p[1], 1, 1);
+    ctx.globalAlpha = 1;
+    ctx.strokeStyle = '#0f766e';
+    ctx.lineWidth = 2;
+    const r = Math.max(6, Math.sqrt((virtual.area || virtual.points.length) / Math.PI) + 4);
+    ctx.beginPath(); ctx.arc(virtual.centroidX, virtual.centroidY, r, 0, Math.PI*2); ctx.stroke();
+    if(showLabels) drawOverlayLabel(virtual.id || 'merge', virtual.centroidX + 5, virtual.centroidY + 9, '#ccfbf1');
+  }
+  ctx.save();
+  ctx.setLineDash([4, 3]);
+  for(const decision of decisions){
+    const color = decision.decision_type === 'split' ? '#f97316' : '#14b8a6';
+    const sourceRois = (decision.source_roi_ids || []).map(roiById).filter(Boolean);
+    ctx.strokeStyle = color;
+    ctx.lineWidth = 2;
+    for(const roi of sourceRois){
+      const r = Math.max(7, Math.sqrt(roi.area / Math.PI) + 5);
+      ctx.beginPath(); ctx.arc(roi.centroidX, roi.centroidY, r, 0, Math.PI*2); ctx.stroke();
+      if(showLabels) drawOverlayLabel(decision.decision_type || 'edit', roi.centroidX + 6, roi.centroidY + 12, color);
+    }
+  }
+  ctx.restore();
+}
+
+function drawOverlayLabel(label, x, y, color){
+  ctx.font = '10px Arial';
+  ctx.fillStyle = '#ffffff';
+  ctx.strokeStyle = '#111827';
+  ctx.lineWidth = 3;
+  ctx.strokeText(String(label), x, y);
+  ctx.fillStyle = color || '#ffffff';
+  ctx.fillText(String(label), x, y);
 }
 
 function drawTrace(){
@@ -1294,6 +1397,19 @@ function markSelectedAction(){
   applyToSelectedRois({needs_action: value}, 'roi_bulk_needs_action');
 }
 
+function splitMergeDecisionId(prefix, ids){
+  return `SM_${prefix}_${ids.map(v => String(v).replace(/[^A-Za-z0-9_-]/g, '')).join('_')}`;
+}
+
+function recordSplitMergeDecision(decision, actionName){
+  annotations.splitMergeDecisions = annotations.splitMergeDecisions || {};
+  const item = migrateSplitMergeDecision(decision);
+  item.id = item.id || splitMergeDecisionId(item.decision_type || 'edit', item.source_roi_ids);
+  item.createdAt = item.createdAt || new Date().toISOString();
+  annotations.splitMergeDecisions[item.id] = item;
+  recordAction(actionName || `roi_${item.decision_type || 'split_merge'}_decision`);
+}
+
 function createVirtualMerge(){
   const rois = selectedRois();
   if(rois.length < 2) return;
@@ -1330,9 +1446,43 @@ function createVirtualMerge(){
     trace_quality: '',
     control_ready: '',
     artifact_class: '',
+    reason_tags: ['merge'],
+    confidence: '',
     notes: ''
   };
+  recordSplitMergeDecision({
+    id: splitMergeDecisionId('merge', ids),
+    decision_type: 'merge',
+    decision_state: 'accepted',
+    source_roi_ids: ids,
+    virtual_roi_id: id,
+    identity_group: annotations.virtualRois[id].identity_group,
+    needs_action: 'merge_needed',
+    reason_tags: ['merge']
+  }, 'roi_virtual_merge_decision');
   applyToSelectedRois({identity_group: annotations.virtualRois[id].identity_group, needs_action: 'merge_needed'}, 'roi_virtual_merge');
+}
+
+function createVisualSplitDecision(){
+  const roi = selectedRoi();
+  if(!roi) return;
+  const targetText = prompt('Target ROI IDs after split, comma-separated', '');
+  if(targetText === null) return;
+  const targets = normalizeIdList(targetText);
+  const id = splitMergeDecisionId('split', [roi.id].concat(targets.length ? targets : [Date.now().toString(36)]));
+  recordSplitMergeDecision({
+    id,
+    decision_type: 'split',
+    decision_state: 'accepted',
+    source_roi_ids: [roi.id],
+    target_roi_ids: targets,
+    needs_action: 'split_needed',
+    reason_tags: ['split'],
+    notes: targets.length ? `Split into ${targets.join(',')}` : 'Split requested from visual review'
+  }, 'roi_visual_split_decision');
+  annotations.rois[roi.id] = Object.assign(roiAnn(roi.id), {needs_action: 'split_needed'});
+  queueSave();
+  renderAll();
 }
 
 function clearMultiSelection(){
@@ -1491,6 +1641,12 @@ function exportRows(type) {
         rows.push([roi.id, ev.frame, ann.state || '', ann.event_state || '', ann.event_type || '', ann.timing_quality || '', notes, ev.z.toFixed(4), ev.amplitude.toFixed(6), roiAnn(roi.id).state || ''].join('\t'));
       }
     }
+  } else if (type === 'splitMerge') {
+    rows.push('decision_id\tdecision_type\tdecision_state\tsource_roi_ids\ttarget_roi_ids\tvirtual_roi_id\tidentity_group\tneeds_action\tconfidence\treason_tags\tnotes');
+    for(const [decisionId, decision] of Object.entries(annotations.splitMergeDecisions || {})){
+      const notes = (decision.notes || '').split(String.fromCharCode(9)).join(' ').split(newline).join(' ');
+      rows.push([decision.id || decisionId, decision.decision_type || '', decision.decision_state || '', (decision.source_roi_ids || []).join(','), (decision.target_roi_ids || []).join(','), decision.virtual_roi_id || '', decision.identity_group || '', decision.needs_action || '', decision.confidence || '', (decision.reason_tags || []).join(','), notes].join('\t'));
+    }
   } else {
     rows.push('suggestion_id\tstate\tartifact_class\tnotes\tpromoted\tcentroid_x\tcentroid_y\tarea\tdiscovery_score\tpriority_score\tlocal_correlation_mean\tevent_support\tartifact_score\tmax_z\tactive_frames\tartifact_cue\tprovenance');
     for(const s of data.discovery?.suggestions || []){
@@ -1502,7 +1658,7 @@ function exportRows(type) {
   const blob = new Blob([rows.join(newline) + newline], {type:'text/tab-separated-values'});
   const a = document.createElement('a');
   a.href = URL.createObjectURL(blob);
-  a.download = type === 'roi' ? 'neuron_roi_annotations.tsv' : type === 'event' ? 'neuron_event_annotations.tsv' : 'neuron_discovery_suggestions.tsv';
+  a.download = type === 'roi' ? 'neuron_roi_annotations.tsv' : type === 'event' ? 'neuron_event_annotations.tsv' : type === 'splitMerge' ? 'neuron_split_merge_decisions.tsv' : 'neuron_discovery_suggestions.tsv';
   a.click();
   URL.revokeObjectURL(a.href);
 }
@@ -1615,7 +1771,8 @@ function initControls(){
     document.getElementById(id).oninput = e => {
       const value = Number(e.target.value);
       setSetting(id, value);
-      if(id === 'kalmanGain' || id === 'spikeGain') traceCache.clear();
+      if(id === 'kalmanGain' || id === 'spikeGain') clearTraceCaches(id);
+      if(id === 'eventThreshold') clearTraceEventCache(id);
       applySettingsToControls();
       renderAll();
     };
@@ -1624,6 +1781,7 @@ function initControls(){
   document.getElementById('bulkIdentityBtn').onclick = assignSelectedIdentity;
   document.getElementById('bulkNeedsActionBtn').onclick = markSelectedAction;
   document.getElementById('virtualMergeBtn').onclick = createVirtualMerge;
+  document.getElementById('visualSplitBtn').onclick = createVisualSplitDecision;
   document.getElementById('clearMultiSelectBtn').onclick = clearMultiSelection;
   document.getElementById('acceptBtn').onclick = () => setRoiState('accept');
   document.getElementById('rejectBtn').onclick = () => setRoiState('reject');
@@ -1649,6 +1807,7 @@ function initControls(){
   document.getElementById('exportRoiBtn').onclick = () => exportRows('roi');
   document.getElementById('exportEventBtn').onclick = () => exportRows('event');
   document.getElementById('exportSuggestionBtn').onclick = () => exportRows('suggestion');
+  document.getElementById('exportSplitMergeBtn').onclick = () => exportRows('splitMerge');
   document.getElementById('exportJsonBtn').onclick = exportJson;
   for (const [id, field] of [['traceQuality','trace_quality'],['controlReady','control_ready'],['roiArtifactClass','artifact_class'],['needsAction','needs_action']]) {
     document.getElementById(id).onchange = e => {

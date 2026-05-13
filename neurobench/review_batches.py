@@ -11,6 +11,13 @@ DEFAULT_TARGET_EVENTS = 30
 DEFAULT_TARGET_SUGGESTIONS = 15
 DEFAULT_TUNING_READY_ROIS = 20
 DEFAULT_TUNING_READY_EVENTS = 20
+GUIDED_REVIEW_QUEUE_IDS = (
+    "unreviewed_high_priority",
+    "uncertain",
+    "likely_artifact",
+    "possible_missed_neuron",
+    "needs_second_reviewer",
+)
 
 
 def _as_float(value: Any, default: float = 0.0) -> float:
@@ -332,6 +339,107 @@ def review_task_feature_rows(review_data: Mapping[str, Any], annotations: Mappin
     return rows
 
 
+def build_guided_review_queues(
+    review_data: Mapping[str, Any],
+    annotations: Mapping[str, Any] | None,
+    *,
+    limit_per_queue: int | None = 30,
+) -> dict[str, Any]:
+    """Build deterministic guided-review queues for dashboard/report surfaces."""
+    ann = migrate_annotations_v3(annotations)
+    rois = list(review_data.get("rois", []) or [])
+    suggestions = list(review_data.get("discovery", {}).get("suggestions", []) or [])
+    queue_items = {queue_id: [] for queue_id in GUIDED_REVIEW_QUEUE_IDS}
+
+    for roi in rois:
+        roi_id = str(roi.get("id"))
+        roi_ann = ann["rois"].get(roi_id, {})
+        state = _state(roi_ann, "cell_state", "state")
+        score, reasons = roi_priority_score(roi, roi_ann)
+        item = _queue_item(
+            "roi",
+            roi_id,
+            score,
+            reasons,
+            area=roi.get("area"),
+            trace_snr=roi.get("traceSnr"),
+            artifact_score=roi.get("artifactScore"),
+            state=state or "unlabeled",
+            confidence=roi_ann.get("confidence", ""),
+        )
+
+        if not _is_reviewed(state):
+            queue_items["unreviewed_high_priority"].append(item)
+        if state == "unsure" or roi_ann.get("confidence") in {"low", "medium"}:
+            queue_items["uncertain"].append(_with_reasons(item, ["uncertain ROI label"]))
+        if _as_float(roi.get("artifactScore"), 0.0) >= 0.4 or roi_ann.get("artifact_class"):
+            queue_items["likely_artifact"].append(_with_reasons(item, ["artifact-like ROI"]))
+        if _needs_second_reviewer(roi_ann):
+            queue_items["needs_second_reviewer"].append(_with_reasons(item, ["needs second reviewer"]))
+
+        for event in roi.get("events", []) or []:
+            frame = event.get("frame")
+            event_id = _event_key(roi_id, frame)
+            event_ann = ann["events"].get(event_id, {})
+            event_state = _state(event_ann, "event_state", "state")
+            event_score = score + _as_float(event.get("z"), _as_float(event.get("score_z"), 0.0)) * 0.4
+            event_item = _queue_item(
+                "event",
+                event_id,
+                event_score,
+                ["event review target"],
+                roi_id=roi_id,
+                frame=frame,
+                z=event.get("z", event.get("score_z")),
+                state=event_state or "unlabeled",
+                confidence=event_ann.get("confidence", ""),
+            )
+            if event_state == "unsure" or event_ann.get("confidence") in {"low", "medium"}:
+                queue_items["uncertain"].append(_with_reasons(event_item, ["uncertain event label"]))
+            if _needs_second_reviewer(event_ann):
+                queue_items["needs_second_reviewer"].append(_with_reasons(event_item, ["needs second reviewer"]))
+
+    for suggestion in suggestions:
+        suggestion_id = str(suggestion.get("id"))
+        suggestion_ann = ann["suggestions"].get(suggestion_id, {})
+        state = "promoted" if suggestion_id in ann.get("promotedRois", {}) else str(suggestion_ann.get("state") or "").strip().lower()
+        score, reasons = suggestion_priority_score(suggestion, suggestion_ann)
+        item = _queue_item(
+            "suggestion",
+            suggestion_id,
+            score,
+            reasons,
+            area=suggestion.get("area"),
+            artifact_score=suggestion.get("artifactScore"),
+            artifact_cue=suggestion.get("artifactCue"),
+            state=state or "unlabeled",
+            confidence=suggestion_ann.get("confidence", ""),
+        )
+        artifact_like = _as_float(suggestion.get("artifactScore"), 0.0) >= 0.4 or suggestion.get("artifactCue") not in {None, "", "none"}
+        if state in {"", "missed", "promoted"} and not artifact_like:
+            queue_items["possible_missed_neuron"].append(_with_reasons(item, ["possible missed neuron"]))
+        if state == "artifact" or artifact_like:
+            queue_items["likely_artifact"].append(_with_reasons(item, ["artifact-like suggestion"]))
+        if state == "unsure" or suggestion_ann.get("confidence") in {"low", "medium"}:
+            queue_items["uncertain"].append(_with_reasons(item, ["uncertain suggestion label"]))
+        if _needs_second_reviewer(suggestion_ann):
+            queue_items["needs_second_reviewer"].append(_with_reasons(item, ["needs second reviewer"]))
+
+    queues: dict[str, Any] = {}
+    for queue_id in GUIDED_REVIEW_QUEUE_IDS:
+        items = _rank_queue_items(queue_items[queue_id])
+        if limit_per_queue is not None:
+            items = items[: int(limit_per_queue)]
+        queues[queue_id] = {
+            "queue_id": queue_id,
+            "label": _QUEUE_LABELS[queue_id],
+            "description": _QUEUE_DESCRIPTIONS[queue_id],
+            "count": len(queue_items[queue_id]),
+            "items": items,
+        }
+    return queues
+
+
 def _rank_events(
     rois: Sequence[Mapping[str, Any]],
     annotations: Mapping[str, Any],
@@ -368,6 +476,71 @@ def _rank_events(
             )
     event_rows.sort(key=lambda row: (-_as_float(row["score"]), row["roi_id"], _as_float(row["frame"])))
     return event_rows[:target_events]
+
+
+_QUEUE_LABELS = {
+    "unreviewed_high_priority": "Unreviewed high priority",
+    "uncertain": "Uncertain labels",
+    "likely_artifact": "Likely artifacts",
+    "possible_missed_neuron": "Possible missed neurons",
+    "needs_second_reviewer": "Needs second reviewer",
+}
+
+_QUEUE_DESCRIPTIONS = {
+    "unreviewed_high_priority": "Unlabeled ROI candidates ranked by transparent priority features.",
+    "uncertain": "ROIs, events, and suggestions with unsure labels or low/medium confidence.",
+    "likely_artifact": "Candidates with artifact scores, artifact cues, or artifact labels.",
+    "possible_missed_neuron": "Discovery suggestions that may represent neurons not covered by current ROIs.",
+    "needs_second_reviewer": "Items explicitly tagged for another reviewer or low-confidence decisions.",
+}
+
+
+def _queue_item(subject_type: str, subject_id: str, score: float, reasons: Sequence[Any], **fields: Any) -> dict[str, Any]:
+    item = {
+        "subject_type": subject_type,
+        "subject_id": str(subject_id),
+        "priority_score": round(float(score), 4),
+        "reason_codes": _reason_codes(reasons),
+        "reasons": list(reasons),
+    }
+    item.update({key: value for key, value in fields.items() if value is not None})
+    return item
+
+
+def _with_reasons(item: Mapping[str, Any], extra_reasons: Sequence[Any]) -> dict[str, Any]:
+    out = dict(item)
+    reasons = list(out.get("reasons", []))
+    for reason in extra_reasons:
+        if reason not in reasons:
+            reasons.append(reason)
+    out["reasons"] = reasons
+    out["reason_codes"] = _reason_codes(reasons)
+    return out
+
+
+def _rank_queue_items(items: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
+    unique: dict[tuple[str, str], dict[str, Any]] = {}
+    for item in items:
+        key = (str(item.get("subject_type")), str(item.get("subject_id")))
+        current = unique.get(key)
+        if current is None or _as_float(item.get("priority_score")) > _as_float(current.get("priority_score")):
+            unique[key] = dict(item)
+    return sorted(
+        unique.values(),
+        key=lambda item: (-_as_float(item.get("priority_score")), str(item.get("subject_type")), str(item.get("subject_id"))),
+    )
+
+
+def _needs_second_reviewer(annotation: Mapping[str, Any]) -> bool:
+    needs_action = str(annotation.get("needs_action") or "").strip().lower()
+    reason_tags = {str(tag).strip().lower() for tag in annotation.get("reason_tags") or []}
+    confidence = str(annotation.get("confidence") or "").strip().lower()
+    return (
+        "second" in needs_action
+        or "second_review" in reason_tags
+        or "needs_second_reviewer" in reason_tags
+        or confidence == "low"
+    )
 
 
 def review_progress(

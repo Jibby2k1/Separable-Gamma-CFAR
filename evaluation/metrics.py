@@ -111,7 +111,7 @@ def calculate_truncated_auc(froc_points: List[Dict], truncation_limit: float) ->
     unique_fppi, indices = np.unique(fppi, return_index=True)
     unique_tpr = np.array(tpr)[indices]
     
-    return np.trapz(unique_tpr, unique_fppi) if len(unique_fppi) >= 2 else 0.0
+    return np.trapezoid(unique_tpr, unique_fppi) if len(unique_fppi) >= 2 else 0.0
 
 def calculate_detection_latency(final_mask_np: np.ndarray,
                                 gt_data: Dict,

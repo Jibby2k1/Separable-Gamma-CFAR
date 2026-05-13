@@ -75,8 +75,10 @@ class ReviewBatchTests(unittest.TestCase):
 
         self.assertIn("review_progress", summary)
         self.assertIn("next_annotation_batch", summary)
+        self.assertIn("guided_review_queues", summary)
         self.assertEqual(summary["review_progress"]["reviewed_rois"], 0)
         self.assertEqual(summary["next_annotation_batch"]["rois"][0]["roi_id"], "1")
+        self.assertIn("unreviewed_high_priority", summary["guided_review_queues"])
         self.assertIn("roi", {task["task_type"] for task in summary["next_annotation_batch"]["tasks"]})
 
     def test_review_task_feature_rows_support_active_learning_exports(self):
@@ -93,6 +95,65 @@ class ReviewBatchTests(unittest.TestCase):
         self.assertEqual([row["subject_type"] for row in rows], ["roi", "suggestion"])
         self.assertEqual(rows[0]["label_state"], "accepted")
         self.assertIn("priority_score", rows[0])
+
+    def test_guided_review_queues_group_high_value_review_targets(self):
+        from neurobench.review_batches import build_guided_review_queues
+
+        review_data = {
+            "rois": [
+                {
+                    "id": 1,
+                    "area": 50,
+                    "priorityScore": 2.0,
+                    "traceSnr": 2.0,
+                    "eventSupport": 0.5,
+                    "artifactScore": 0.1,
+                    "events": [{"frame": 10, "z": 3.0}],
+                },
+                {"id": 2, "area": 80, "priorityScore": 1.0, "traceSnr": 0.4, "artifactScore": 0.7, "events": []},
+                {"id": 3, "area": 45, "priorityScore": 0.5, "traceSnr": 1.8, "artifactScore": 0.1, "events": [{"frame": 12, "z": 2.0}]},
+            ],
+            "discovery": {
+                "suggestions": [
+                    {"id": "S1", "priorityScore": 2.0, "artifactCue": "none", "artifactScore": 0.1, "eventSupport": 0.5},
+                    {"id": "S2", "priorityScore": 1.0, "artifactCue": "vessel", "artifactScore": 0.8},
+                ]
+            },
+        }
+        annotations = {
+            "schema_version": 3,
+            "rois": {
+                "2": {"cell_state": "rejected", "artifact_class": "vessel", "confidence": "high"},
+                "3": {"cell_state": "unsure", "confidence": "low", "reason_tags": ["second_review"]},
+            },
+            "events": {"3:12": {"event_state": "unsure", "confidence": "medium"}},
+            "suggestions": {"S2": {"state": "artifact", "confidence": "high"}},
+        }
+
+        queues = build_guided_review_queues(review_data, annotations, limit_per_queue=10)
+
+        self.assertEqual(queues["unreviewed_high_priority"]["items"][0]["subject_id"], "1")
+        self.assertEqual({item["subject_id"] for item in queues["likely_artifact"]["items"]}, {"2", "S2"})
+        self.assertEqual(queues["possible_missed_neuron"]["items"][0]["subject_id"], "S1")
+        self.assertIn("3", {item["subject_id"] for item in queues["uncertain"]["items"]})
+        self.assertIn("3", {item["subject_id"] for item in queues["needs_second_reviewer"]["items"]})
+        self.assertIn("3:12", {item["subject_id"] for item in queues["uncertain"]["items"]})
+
+    def test_guided_review_queues_limit_items_without_losing_total_count(self):
+        from neurobench.review_batches import build_guided_review_queues
+
+        review_data = {
+            "rois": [
+                {"id": idx, "priorityScore": float(idx), "traceSnr": 2.0, "artifactScore": 0.0, "events": []}
+                for idx in range(5)
+            ],
+            "discovery": {"suggestions": []},
+        }
+
+        queue = build_guided_review_queues(review_data, {"schema_version": 3}, limit_per_queue=2)["unreviewed_high_priority"]
+
+        self.assertEqual(queue["count"], 5)
+        self.assertEqual([item["subject_id"] for item in queue["items"]], ["4", "3"])
 
 
 class SweepPackAndReportTests(unittest.TestCase):

@@ -1,0 +1,47 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "neurobench"
+version = "0.1.0"
+description = "Gamma/CFAR neuroimaging discovery and review workbench tools"
+readme = "README.md"
+requires-python = ">=3.10"
+license = {text = "MIT"}
+authors = [
+  {name = "Neurobench contributors"}
+]
+dependencies = [
+  "numpy",
+  "scipy",
+  "pandas",
+  "matplotlib",
+  "scikit-image",
+  "pillow",
+  "imageio",
+  "tifffile",
+  "tqdm",
+  "psutil",
+  "pyyaml",
+  "jsonschema",
+  "torch",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest",
+]
+gpu = [
+  "cupy",
+  "nvidia-ml-py",
+]
+
+[project.scripts]
+neurobench = "neurobench.cli.main:main"
+
+[tool.setuptools.packages.find]
+include = ["neurobench*"]
+
+[tool.setuptools.package-data]
+"neurobench.workbench" = ["assets/*.js", "assets/*.css"]
