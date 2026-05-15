@@ -6,6 +6,7 @@ from collections.abc import Iterable, Mapping, Sequence
 from typing import Any
 
 from neurobench.annotations import migrate_annotations_v3
+from neurobench.review.provenance import reviewer_provenance_summary
 
 
 SUBJECT_GROUPS = ("rois", "events", "suggestions")
@@ -70,7 +71,7 @@ def annotation_agreement_report(
             "exact_agreement_count": sum(1 for row in group_rows if row["exact_agreement"]),
             "exact_agreement_fraction": _fraction(sum(1 for row in group_rows if row["exact_agreement"]), len(group_rows)),
             "binary": binary_cohen_kappa(binary_a, binary_b),
-            "label_pairs": dict(Counter((row["label_a"], row["label_b"]) for row in group_rows if row["both_labeled"])),
+            "label_pairs": _label_pair_counts(group_rows),
         }
 
     disagreements = [row for row in rows if _needs_adjudication(row)]
@@ -88,6 +89,10 @@ def annotation_agreement_report(
         "by_group": group_summaries,
         "by_confidence_pair": _breakdown(rows, "confidence_pair"),
         "by_artifact_pair": _breakdown(rows, "artifact_pair"),
+        "reviewer_provenance": {
+            reviewer_a_id: reviewer_provenance_summary(ann_a),
+            reviewer_b_id: reviewer_provenance_summary(ann_b),
+        },
         "disagreement_queue": disagreements,
     }
 
@@ -109,6 +114,91 @@ def disagreement_queue(
         reviewer_b_id=reviewer_b_id,
         subject_groups=subject_groups,
     )["disagreement_queue"]
+
+
+def disagreement_tsv_rows(report: Mapping[str, Any]) -> list[dict[str, Any]]:
+    """Return flat TSV-friendly rows for the report disagreement queue."""
+
+    rows = []
+    for item in report.get("disagreement_queue", []) or []:
+        rows.append(
+            {
+                "subject_group": item.get("subject_group", ""),
+                "subject_id": item.get("subject_id", ""),
+                "label_a": item.get("label_a", ""),
+                "label_b": item.get("label_b", ""),
+                "reviewer_a": item.get("reviewer_a", ""),
+                "reviewer_b": item.get("reviewer_b", ""),
+                "both_labeled": int(bool(item.get("both_labeled"))),
+                "exact_agreement": int(bool(item.get("exact_agreement"))),
+                "confidence_a": (item.get("confidence_pair") or ["", ""])[0],
+                "confidence_b": (item.get("confidence_pair") or ["", ""])[1],
+                "artifact_a": (item.get("artifact_pair") or ["", ""])[0],
+                "artifact_b": (item.get("artifact_pair") or ["", ""])[1],
+                "source_reviewer_id_a": (item.get("reviewer_id_pair") or ["", ""])[0],
+                "source_reviewer_id_b": (item.get("reviewer_id_pair") or ["", ""])[1],
+                "updated_at_a": (item.get("updated_at_pair") or ["", ""])[0],
+                "updated_at_b": (item.get("updated_at_pair") or ["", ""])[1],
+                "reason_tags_a": ",".join(item.get("reason_tags_a") or []),
+                "reason_tags_b": ",".join(item.get("reason_tags_b") or []),
+            }
+        )
+    return rows
+
+
+def agreement_report_markdown(report: Mapping[str, Any], *, max_disagreements: int = 25) -> str:
+    """Render a concise human-readable agreement report."""
+
+    overall = report.get("overall", {}) or {}
+    binary = overall.get("binary", {}) or {}
+    lines = [
+        "# Annotation Agreement Report",
+        "",
+        f"- Reviewers: {', '.join(str(item) for item in report.get('reviewers', []))}",
+        f"- Compared subjects: {overall.get('subject_count', 0)}",
+        f"- Both labeled: {overall.get('both_labeled_count', 0)}",
+        f"- Exact agreement: {_pct(overall.get('exact_agreement_fraction', 0.0))}",
+        f"- Binary kappa: {float(binary.get('kappa', 0.0)):.3f} (n={binary.get('n', 0)})",
+        f"- Disagreement queue: {len(report.get('disagreement_queue', []) or [])}",
+        "",
+        "## By Group",
+        "",
+        "| Group | Subjects | Both labeled | Exact agreement | Kappa |",
+        "| --- | ---: | ---: | ---: | ---: |",
+    ]
+    for group, summary in (report.get("by_group", {}) or {}).items():
+        kappa = ((summary or {}).get("binary") or {}).get("kappa", 0.0)
+        lines.append(
+            f"| {group} | {summary.get('subject_count', 0)} | {summary.get('both_labeled_count', 0)} | "
+            f"{_pct(summary.get('exact_agreement_fraction', 0.0))} | {float(kappa):.3f} |"
+        )
+    provenance = report.get("reviewer_provenance", {}) or {}
+    lines.extend(["", "## Reviewer Provenance", "", "| File | Reviewed labels | With reviewer | Missing reviewer |", "| --- | ---: | ---: | ---: |"])
+    for reviewer, summary in provenance.items():
+        lines.append(
+            f"| {reviewer} | {summary.get('reviewed_total', 0)} | "
+            f"{summary.get('with_reviewer_total', 0)} | {summary.get('missing_reviewer_total', 0)} |"
+        )
+    rows = disagreement_tsv_rows(report)[:max_disagreements]
+    lines.extend(["", "## Disagreement Queue", ""])
+    if not rows:
+        lines.append("No disagreements found.")
+    else:
+        lines.extend(["| Subject | A | B | Confidence | Notes |", "| --- | --- | --- | --- | --- |"])
+        for row in rows:
+            notes = []
+            if not row["both_labeled"]:
+                notes.append("missing label")
+            if row["artifact_a"] != row["artifact_b"]:
+                notes.append(f"artifact {row['artifact_a']} / {row['artifact_b']}")
+            lines.append(
+                f"| {row['subject_group']}:{row['subject_id']} | {row['label_a'] or 'unlabeled'} | "
+                f"{row['label_b'] or 'unlabeled'} | {row['confidence_a']} / {row['confidence_b']} | "
+                f"{'; '.join(notes) or 'label conflict'} |"
+            )
+        if len(report.get("disagreement_queue", []) or []) > len(rows):
+            lines.append(f"\nShowing first {len(rows)} disagreements.")
+    return "\n".join(lines) + "\n"
 
 
 def _comparison_rows_for_group(
@@ -143,6 +233,8 @@ def _comparison_rows_for_group(
                 "exact_agreement": exact_agreement,
                 "confidence_pair": (_confidence(item_a), _confidence(item_b)),
                 "artifact_pair": (_artifact_label(item_a), _artifact_label(item_b)),
+                "reviewer_id_pair": (_reviewer_id(item_a), _reviewer_id(item_b)),
+                "updated_at_pair": (_updated_at(item_a), _updated_at(item_b)),
                 "reason_tags_a": list(item_a.get("reason_tags") or []),
                 "reason_tags_b": list(item_b.get("reason_tags") or []),
             }
@@ -217,6 +309,14 @@ def _artifact_label(item: Mapping[str, Any]) -> str:
     return "none"
 
 
+def _reviewer_id(item: Mapping[str, Any]) -> str:
+    return str(item.get("reviewer_id") or "").strip()
+
+
+def _updated_at(item: Mapping[str, Any]) -> str:
+    return str(item.get("updatedAt") or item.get("updated_at") or "").strip()
+
+
 def _breakdown(rows: Sequence[Mapping[str, Any]], key: str) -> dict[str, int]:
     counts: defaultdict[str, int] = defaultdict(int)
     for row in rows:
@@ -229,8 +329,24 @@ def _breakdown(rows: Sequence[Mapping[str, Any]], key: str) -> dict[str, int]:
     return dict(sorted(counts.items()))
 
 
+def _label_pair_counts(rows: Sequence[Mapping[str, Any]]) -> dict[str, int]:
+    counts = Counter(
+        (
+            str(row.get("label_a") or "unlabeled"),
+            str(row.get("label_b") or "unlabeled"),
+        )
+        for row in rows
+        if row.get("both_labeled")
+    )
+    return {" / ".join(pair): count for pair, count in sorted(counts.items())}
+
+
 def _fraction(numerator: int, denominator: int) -> float:
     return numerator / denominator if denominator else 0.0
+
+
+def _pct(value: Any) -> str:
+    return f"{100.0 * float(value or 0.0):.1f}%"
 
 
 def _sort_key(value: Any) -> tuple[int, Any]:

@@ -34,7 +34,36 @@ class DocsWorkflowTests(unittest.TestCase):
     def test_readme_links_raw_video_to_report_workflow(self):
         readme = (ROOT / "README.md").read_text(encoding="utf-8")
 
+        self.assertIn("docs/README.md", readme)
         self.assertIn("docs/workflows/raw_video_to_report.md", readme)
+
+    def test_docs_index_points_to_user_facing_workbench_pages(self):
+        text = (ROOT / "docs" / "README.md").read_text(encoding="utf-8")
+
+        for expected in [
+            "NEURON_WORKBENCH.md",
+            "RESTING_VIDEO_ALGORITHM_BRIEF.md",
+            "ARCHITECTURE_LAB.md",
+            "DATASET_QC.md",
+            "METRICS_AUDIT.md",
+            "ANNOTATION_SCHEMA.md",
+            "developer/adding_pipeline_stage.md",
+        ]:
+            self.assertIn(expected, text)
+
+    def test_workbench_docs_explain_current_dashboard_pages(self):
+        text = (ROOT / "docs" / "NEURON_WORKBENCH.md").read_text(encoding="utf-8")
+
+        for expected in [
+            "Quick Start",
+            "What To Use When",
+            "Suggested Review Workflow",
+            "Experiment Lab",
+            "Process Lab",
+            "Metrics/Audit",
+            "Review Session",
+        ]:
+            self.assertIn(expected, text)
 
 
 if __name__ == "__main__":

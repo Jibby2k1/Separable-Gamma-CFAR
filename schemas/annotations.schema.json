@@ -20,6 +20,8 @@
           "needs_action": {"type": "string"},
           "reason_tags": {"type": "array", "items": {"type": "string"}},
           "confidence": {"type": "string", "enum": ["", "low", "medium", "high"]},
+          "reviewer_id": {"type": "string"},
+          "updatedAt": {"type": "string"},
           "deleted": {"type": "boolean"},
           "notes": {"type": "string"}
         },
@@ -36,7 +38,9 @@
           "event_type": {"type": "string"},
           "timing_quality": {"type": "string", "enum": ["", "clear_frame", "ambiguous", "slow_transient"]},
           "reason_tags": {"type": "array", "items": {"type": "string"}},
-          "confidence": {"type": "string", "enum": ["", "low", "medium", "high"]}
+          "confidence": {"type": "string", "enum": ["", "low", "medium", "high"]},
+          "reviewer_id": {"type": "string"},
+          "updatedAt": {"type": "string"}
         },
         "additionalProperties": true
       }
@@ -49,6 +53,8 @@
           "state": {"type": "string"},
           "reason_tags": {"type": "array", "items": {"type": "string"}},
           "confidence": {"type": "string", "enum": ["", "low", "medium", "high"]},
+          "reviewer_id": {"type": "string"},
+          "updatedAt": {"type": "string"},
           "notes": {"type": "string"}
         },
         "additionalProperties": true
@@ -70,6 +76,8 @@
           "artifact_class": {"type": "string"},
           "reason_tags": {"type": "array", "items": {"type": "string"}},
           "confidence": {"type": "string", "enum": ["", "low", "medium", "high"]},
+          "reviewer_id": {"type": "string"},
+          "updatedAt": {"type": "string"},
           "notes": {"type": "string"}
         },
         "additionalProperties": true
@@ -92,7 +100,9 @@
           "reason_tags": {"type": "array", "items": {"type": "string"}},
           "confidence": {"type": "string", "enum": ["", "low", "medium", "high"]},
           "notes": {"type": "string"},
-          "createdAt": {"type": "string"}
+          "createdAt": {"type": "string"},
+          "reviewer_id": {"type": "string"},
+          "updatedAt": {"type": "string"}
         },
         "additionalProperties": true
       }

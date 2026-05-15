@@ -51,8 +51,21 @@ ROI_COLUMNS = [
     "confidence",
     "reason_tags",
     "notes",
+    "reviewer_id",
+    "updatedAt",
 ]
-EVENT_COLUMNS = ["roi_id", "frame", "event_state", "event_type", "timing_quality", "confidence", "reason_tags", "notes"]
+EVENT_COLUMNS = [
+    "roi_id",
+    "frame",
+    "event_state",
+    "event_type",
+    "timing_quality",
+    "confidence",
+    "reason_tags",
+    "notes",
+    "reviewer_id",
+    "updatedAt",
+]
 SPLIT_MERGE_COLUMNS = [
     "decision_id",
     "decision_type",
@@ -65,6 +78,8 @@ SPLIT_MERGE_COLUMNS = [
     "confidence",
     "reason_tags",
     "notes",
+    "reviewer_id",
+    "updatedAt",
 ]
 
 
@@ -154,7 +169,7 @@ def _roi_rows(review_data: Mapping[str, Any], ann: Mapping[str, Any], profile: s
                 str(item.get("roi_kind", "virtual")),
                 ",".join(str(value) for value in item.get("source_roi_ids", []) or []),
                 item,
-                needs_action="merge_needed" if item.get("roi_kind") == "virtual_merge" else "",
+                needs_action=str(item.get("needs_action") or ("merge_needed" if item.get("roi_kind") == "virtual_merge" else "")),
             )
         )
     rows.sort(key=lambda row: row["roi_id"])
@@ -184,6 +199,8 @@ def _event_rows(review_data: Mapping[str, Any], ann: Mapping[str, Any], profile:
                     "confidence": _clean(item.get("confidence", "")),
                     "reason_tags": _clean(",".join(str(tag) for tag in item.get("reason_tags", []) or [])),
                     "notes": _clean(item.get("notes", "")),
+                    "reviewer_id": _clean(item.get("reviewer_id", "")),
+                    "updatedAt": _clean(item.get("updatedAt", "")),
                 }
             )
     rows.sort(key=lambda row: (row["roi_id"], _as_int(row["frame"])))
@@ -210,6 +227,8 @@ def _split_merge_rows(ann: Mapping[str, Any], profile: str) -> list[dict[str, st
                 "confidence": _clean(item.get("confidence", "")),
                 "reason_tags": _clean(",".join(str(tag) for tag in item.get("reason_tags", []) or [])),
                 "notes": _clean(item.get("notes", "")),
+                "reviewer_id": _clean(item.get("reviewer_id", "")),
+                "updatedAt": _clean(item.get("updatedAt", "")),
             }
         )
     rows.sort(key=lambda row: row["decision_id"])
@@ -230,6 +249,8 @@ def _roi_row(roi_id: str, roi_kind: str, source_roi_ids: str, item: Mapping[str,
         "confidence": _clean(item.get("confidence", "")),
         "reason_tags": _clean(",".join(str(tag) for tag in item.get("reason_tags", []) or [])),
         "notes": _clean(item.get("notes", "")),
+        "reviewer_id": _clean(item.get("reviewer_id", "")),
+        "updatedAt": _clean(item.get("updatedAt", "")),
     }
 
 

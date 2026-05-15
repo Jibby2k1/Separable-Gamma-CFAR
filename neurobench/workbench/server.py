@@ -20,6 +20,7 @@ from urllib.parse import unquote, urlparse
 
 from neurobench.architecture_runs import as_run_manifest
 from neurobench.pipeline_catalog import normalize_pipeline
+from neurobench.workbench.materialize import materialize_virtual_roi_traces
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -162,6 +163,26 @@ def atomic_write_json(path: Path, payload: dict[str, Any]) -> None:
     tmp = path.with_name(f"{path.name}.tmp")
     tmp.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     os.replace(tmp, path)
+
+
+def resolve_materialization_raw_video(app_dir: Path, payload: dict[str, Any], review_data: dict[str, Any]) -> Path:
+    raw_video = payload.get("raw_video")
+    if raw_video:
+        raw_path = Path(str(raw_video)).expanduser()
+        if not raw_path.is_absolute():
+            raw_path = (PROJECT_ROOT / raw_path).resolve()
+        return raw_path
+    manifest_path = app_dir / "dataset_manifest.generated.json"
+    if manifest_path.exists():
+        manifest = load_json(manifest_path)
+        raw = (manifest.get("paths") or {}).get("raw_video")
+        if raw:
+            return Path(str(raw)).expanduser().resolve()
+    dataset_id = infer_dataset_id(app_dir, review_data)
+    inferred = find_raw_video(review_data, dataset_id)
+    if inferred is None:
+        raise RuntimeError("Could not infer raw video path. Add raw_video to the materialization request.")
+    return inferred.resolve()
 
 
 def load_run(app_dir: Path, run_id: str) -> dict[str, Any] | None:
@@ -525,6 +546,51 @@ class WorkbenchHandler(BaseHTTPRequestHandler):
         self._send_json(404, {"error": "unknown api endpoint"}, include_body=include_body)
         return True
 
+    def _materialize_traces(self, app_dir: Path, payload: dict[str, Any]) -> None:
+        review_path = app_dir / "review_data.json"
+        if not review_path.exists():
+            self._send_json(404, {"error": "review_data.json not found"})
+            return
+        review_data = load_json(review_path)
+        annotations_path = app_dir / "annotations.json"
+        if isinstance(payload.get("annotations"), dict):
+            annotations = dict(payload["annotations"])
+        elif annotations_path.exists():
+            annotations = load_json(annotations_path)
+        else:
+            annotations = {"version": 3, "schema_version": 3, "settings": {}, "virtualRois": {}, "runs": {}}
+        try:
+            raw_path = resolve_materialization_raw_video(app_dir, payload, review_data)
+            if not raw_path.exists():
+                self._send_json(404, {"error": f"raw video not found: {raw_path}"})
+                return
+            result = materialize_virtual_roi_traces(
+                review_data=review_data,
+                annotations=annotations,
+                raw_video_path=raw_path,
+                run_id=payload.get("run_id") or (annotations.get("settings") or {}).get("activeRunId"),
+                roi_ids=payload.get("roi_ids") or None,
+                outer_radius_px=int(payload.get("outer_radius_px") or 15),
+                neuropil_weight=float(payload.get("neuropil_weight") or 0.7),
+                event_threshold_z=float(payload.get("event_threshold_z") or 2.4),
+                kalman_gain=float(payload.get("kalman_gain") or 0.06),
+                spike_gain=float(payload.get("spike_gain") or 0.008),
+                negative_gain=float(payload.get("negative_gain") or 0.11),
+            )
+        except Exception as exc:
+            self._send_json(400, {"error": str(exc)})
+            return
+        atomic_write_json(annotations_path, result["annotations"])
+        self._send_json(
+            200,
+            {
+                "ok": True,
+                "raw_video": str(raw_path),
+                "materialized_ids": result["materialized_ids"],
+                "annotations": result["annotations"],
+            },
+        )
+
     def _serve_file(self, *, include_body: bool) -> None:
         path = self._safe_path()
         if path is None:
@@ -573,7 +639,7 @@ class WorkbenchHandler(BaseHTTPRequestHandler):
         rel = unquote(parsed.path).lstrip("/")
         parts = list(Path(rel).parts)
         tail = parts[parts.index("api") + 1 :]
-        if tail not in (["jobs", "generate-view"], ["jobs", "generate-preview"]):
+        if tail not in (["jobs", "generate-view"], ["jobs", "generate-preview"], ["materialize-traces"]):
             self._send_json(404, {"error": "unknown api endpoint"})
             return
         if not owner_token_matches(self.headers.get("X-Neurobench-Owner-Token")):
@@ -590,6 +656,9 @@ class WorkbenchHandler(BaseHTTPRequestHandler):
             return
         if not isinstance(payload, dict):
             self._send_json(400, {"error": "payload must be an object"})
+            return
+        if tail == ["materialize-traces"]:
+            self._materialize_traces(app_dir, payload)
             return
         if tail == ["jobs", "generate-preview"]:
             payload["preview"] = True

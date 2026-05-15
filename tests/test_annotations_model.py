@@ -19,8 +19,8 @@ class AnnotationModelTests(unittest.TestCase):
 
         migrated = migrate_annotations_v3(
             {
-                "rois": {"1": {"state": "accept", "reason_codes": "compact,event_supported", "confidence": "HIGH"}},
-                "events": {"1:4": {"state": "unsure"}},
+                "rois": {"1": {"state": "accept", "reason_codes": "compact,event_supported", "confidence": "HIGH", "reviewer_id": "RV"}},
+                "events": {"1:4": {"state": "unsure", "updatedAt": "2026-05-14T00:00:00Z"}},
                 "suggestions": {"S1": {"state": "missed", "reason_tags": ["uncovered"]}},
                 "virtualRois": {"V1": {"roi_kind": "virtual_merge", "confidence": "invalid"}},
                 "splitMergeDecisions": {
@@ -38,7 +38,9 @@ class AnnotationModelTests(unittest.TestCase):
         self.assertEqual(migrated["rois"]["1"]["cell_state"], "accepted")
         self.assertEqual(migrated["rois"]["1"]["reason_tags"], ["compact", "event_supported"])
         self.assertEqual(migrated["rois"]["1"]["confidence"], "high")
+        self.assertEqual(migrated["rois"]["1"]["reviewer_id"], "RV")
         self.assertEqual(migrated["events"]["1:4"]["reason_tags"], [])
+        self.assertEqual(migrated["events"]["1:4"]["updatedAt"], "2026-05-14T00:00:00Z")
         self.assertEqual(migrated["events"]["1:4"]["confidence"], "")
         self.assertEqual(migrated["suggestions"]["S1"]["reason_tags"], ["uncovered"])
         self.assertEqual(migrated["virtualRois"]["V1"]["confidence"], "")
@@ -70,6 +72,36 @@ class AnnotationModelTests(unittest.TestCase):
         self.assertEqual(summary["roi_confidence_counts"], {"high": 1})
         self.assertEqual(summary["event_confidence_counts"], {"medium": 1})
         self.assertEqual(summary["reason_tag_counts"], {"compact": 1, "clear_onset": 1, "uncovered": 1})
+
+    def test_manual_virtual_roi_geometry_roundtrip(self):
+        from neurobench.models.annotations import AnnotationSet
+
+        annotations = AnnotationSet.from_dict(
+            {
+                "virtualRois": {
+                    "MR_1": {
+                        "id": "MR_1",
+                        "roi_kind": "manual_circle",
+                        "source_roi_ids": [],
+                        "cell_state": "accepted",
+                        "confidence": "medium",
+                        "reason_tags": ["manual"],
+                        "centroidX": 4.0,
+                        "centroidY": 5.0,
+                        "bbox": [2, 3, 6, 7],
+                        "area": 13,
+                        "points": [[4, 5], [4, 6]],
+                    }
+                }
+            }
+        )
+
+        annotations.validate()
+        payload = annotations.to_dict()
+
+        self.assertEqual(payload["virtualRois"]["MR_1"]["roi_kind"], "manual_circle")
+        self.assertEqual(payload["virtualRois"]["MR_1"]["reason_tags"], ["manual"])
+        self.assertEqual(payload["virtualRois"]["MR_1"]["points"], [[4, 5], [4, 6]])
 
     def test_annotation_schema_rejects_invalid_confidence(self):
         from neurobench.validation.schemas import validate_dict
@@ -105,8 +137,8 @@ class AnnotationModelTests(unittest.TestCase):
         }
         annotations = {
             "schema_version": 3,
-            "rois": {"1": {"cell_state": "accepted", "confidence": "high", "reason_tags": ["compact"]}},
-            "events": {"1:4": {"event_state": "accepted", "confidence": "medium", "reason_tags": ["clear_onset"]}},
+            "rois": {"1": {"cell_state": "accepted", "confidence": "high", "reason_tags": ["compact"], "reviewer_id": "RV"}},
+            "events": {"1:4": {"event_state": "accepted", "confidence": "medium", "reason_tags": ["clear_onset"], "reviewer_id": "RV"}},
             "suggestions": {},
             "settings": {},
         }
@@ -138,8 +170,10 @@ class AnnotationModelTests(unittest.TestCase):
 
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("confidence\treason_tags", roi_tsv.splitlines()[0])
+        self.assertIn("reviewer_id\tupdatedAt", roi_tsv.splitlines()[0])
         self.assertIn("high\tcompact", roi_tsv)
         self.assertIn("medium\tclear_onset", event_tsv)
+        self.assertIn("RV", event_tsv)
 
 
 if __name__ == "__main__":

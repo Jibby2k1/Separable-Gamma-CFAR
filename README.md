@@ -219,16 +219,21 @@ uses stdlib Python for the local browser UI/autosave server. New samples should
 be run through a dataset manifest so processed videos can be opened from one
 index page.
 
-For a concise lab-shareable explanation of the current resting-video algorithm,
-waveforms, event markers, and untuned baseline status, see
-[docs/RESTING_VIDEO_ALGORITHM_BRIEF.md](docs/RESTING_VIDEO_ALGORITHM_BRIEF.md).
-For a CPU-only end-to-end path from a synthetic raw video to QC, pipeline runs,
-reports, sweeps, and exports, see
-[docs/workflows/raw_video_to_report.md](docs/workflows/raw_video_to_report.md).
-For the developer path to add or wire a new Architecture Lab stage, see
-[docs/developer/adding_pipeline_stage.md](docs/developer/adding_pipeline_stage.md).
-For the generated public Python API reference, see
-[docs/API_REFERENCE.md](docs/API_REFERENCE.md).
+For the full documentation map, start with
+[docs/README.md](docs/README.md). The most useful entry points are:
+
+- [docs/NEURON_WORKBENCH.md](docs/NEURON_WORKBENCH.md) for running and using
+  the local dashboard.
+- [docs/RESTING_VIDEO_ALGORITHM_BRIEF.md](docs/RESTING_VIDEO_ALGORITHM_BRIEF.md)
+  for a concise lab-shareable explanation of the current resting-video
+  algorithm, waveforms, event markers, and untuned baseline status.
+- [docs/workflows/raw_video_to_report.md](docs/workflows/raw_video_to_report.md)
+  for a CPU-only end-to-end path from a synthetic raw video to QC, pipeline
+  runs, reports, sweeps, and exports.
+- [docs/developer/adding_pipeline_stage.md](docs/developer/adding_pipeline_stage.md)
+  for the developer path to add or wire a new Architecture Lab stage.
+- [docs/API_REFERENCE.md](docs/API_REFERENCE.md) for the generated Python API
+  reference.
 
 1. Create a manifest for the TIFF:
 

@@ -45,6 +45,19 @@ def _annotations() -> dict:
                 "cell_state": "accepted",
                 "confidence": "medium",
                 "reason_tags": ["merge"],
+            },
+            "MR_1": {
+                "id": "MR_1",
+                "roi_kind": "manual_circle",
+                "source_roi_ids": [],
+                "cell_state": "accepted",
+                "confidence": "medium",
+                "reason_tags": ["manual"],
+                "needs_action": "",
+                "centroidX": 4.0,
+                "centroidY": 4.0,
+                "area": 12,
+                "points": [[4, 4]],
             }
         },
         "splitMergeDecisions": {
@@ -89,6 +102,9 @@ class AnnotationExportTests(unittest.TestCase):
         self.assertEqual(bundle.selection_policy["name"], "accepted_only")
         self.assertIn("\n1\tsource\t\taccepted", roi_tsv)
         self.assertIn("\nV1\tvirtual_merge\t1,3\taccepted", roi_tsv)
+        self.assertIn("\nMR_1\tmanual_circle\t\taccepted", roi_tsv)
+        self.assertIn("\tmedium\tmanual\t", roi_tsv)
+        self.assertNotIn("MR_1\tmanual_circle\t\taccepted\t\t\t\t\tmerge_needed", roi_tsv)
         self.assertNotIn("\n2\tsource", roi_tsv)
         self.assertNotIn("\n3\tsource", roi_tsv)
         self.assertIn("\n1\t4\taccepted", event_tsv)

@@ -25,6 +25,22 @@ It provides lightweight checks for the current video and candidate set:
 - generated missed-neuron proposal and ROI artifact-risk tables when attached
 - evidence-map thumbnails
 
+Use this page when a run looks suspicious in Review. It is meant to connect a
+visual failure mode to the exact pipeline stage that produced, or should have
+produced, the relevant intermediate output.
+
+## Recommended Workflow
+
+1. Select the same run that you are inspecting in Review or Architecture Lab.
+2. Use the synchronized frame slider to inspect raw frames and generated stage
+   outputs side-by-side.
+3. Toggle missing outputs when you need to know which pipeline stages are still
+   only planned metadata.
+4. Check ROI-size, trace-noise, event-density, saturation, and drift warnings
+   before interpreting parameter changes.
+5. Use the Discovery and Artifact Triage tables to decide whether to loosen
+   thresholds, suppress artifacts, or add missed-neuron review targets.
+
 The page is designed to catch practical issues before parameter tuning:
 
 - ROIs that are much smaller than expected soma size

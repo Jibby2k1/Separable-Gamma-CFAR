@@ -711,6 +711,13 @@ Review workflow helpers.
 - Signature: `annotation_agreement_report(reviewer_a: Mapping[str, Any], reviewer_b: Mapping[str, Any], *, reviewer_a_id: str='reviewer_a', reviewer_b_id: str='reviewer_b', subject_groups: Iterable[str]=SUBJECT_GROUPS) -> dict[str, Any]`
 - Summary: Compare two annotation sets and return agreement plus adjudication items.
 
+### `backfill_reviewer_ids`
+
+- Kind: `function`
+- Source: `neurobench.review.provenance`
+- Signature: `backfill_reviewer_ids(annotations: Mapping[str, Any], reviewer_id: str, *, run_id: str | None=None, all_runs: bool=False, overwrite: bool=False, updated_at: str | None=None) -> dict[str, Any]`
+- Summary: Return annotations with reviewed items stamped with a reviewer ID.
+
 ### `binary_cohen_kappa`
 
 - Kind: `function`
@@ -724,6 +731,13 @@ Review workflow helpers.
 - Source: `neurobench.review.agreement`
 - Signature: `disagreement_queue(reviewer_a: Mapping[str, Any], reviewer_b: Mapping[str, Any], *, reviewer_a_id: str='reviewer_a', reviewer_b_id: str='reviewer_b', subject_groups: Iterable[str]=SUBJECT_GROUPS) -> list[dict[str, Any]]`
 - Summary: Return only the adjudication-ready disagreement items.
+
+### `reviewer_provenance_summary`
+
+- Kind: `function`
+- Source: `neurobench.review.provenance`
+- Signature: `reviewer_provenance_summary(annotations: Mapping[str, Any], *, run_id: str | None=None, all_runs: bool=False) -> dict[str, Any]`
+- Summary: Return reviewer provenance coverage for reviewed annotation items.
 
 ## `neurobench.validation`
 

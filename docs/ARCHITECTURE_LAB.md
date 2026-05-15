@@ -48,10 +48,46 @@ Review/Process Lab when outputs are ready. Generated runs are isolated under
 `app/generated_runs/<run_id>/` so a parameter test does not overwrite the
 baseline dashboard.
 
+Compare mode also includes a synchronized A/B Review viewer. Choose Run A and
+Run B, then load A/B Review to fetch each generated `review_data.json` into a
+browser cache. The viewer shows the same frame from both runs side-by-side with
+ROI circles and event-near-frame highlights. It is read-only: changing A/B
+selection does not replace the main Review page until you explicitly choose
+`Use A In Review/QC` or `Use B In Review/QC`. Use `Next Difference` or
+`Prev Difference` to jump to frames where the two loaded runs have different
+candidate event counts.
+
 Build mode is intentionally not a browser execution engine. In v1, the
 workbench can configure, save, and export planned pipeline metadata, but it does
 not run Fiji/Groovy, Python, Suite2p, CaImAn, PMD, OASIS, denoising models, or
 other compute pipelines in-browser.
+
+## Recommended Workflow
+
+1. Use `Compare` mode to understand the current baseline and any completed
+   generated runs.
+2. Use `Build Pipeline` only when you want to change the actual sequence of
+   stages or their parameters.
+3. Keep the stack small for early experiments. Prefer one or two parameter
+   changes at a time so Review and Process Lab comparisons remain interpretable.
+4. Save planned runs before generation. Planned runs are visible to Review,
+   Experiment Lab, and Process Lab, but they remain clearly marked as planned
+   until generated artifacts exist.
+5. Generate a preview first. Inspect the output in Review and Process Lab
+   before launching a full run.
+
+## Architecture Lab vs. Experiment Lab
+
+Use Architecture Lab when the question is "what should this pipeline contain?"
+Use Experiment Lab when the question is "which values should we try for this
+pipeline?"
+
+- Architecture Lab owns the ordered stage stack, component descriptions,
+  parameter meanings, real-time badges, validation messages, and run comparison.
+- Experiment Lab reuses that stack to create sweep axes or named parameter
+  sets, then saves them as planned architecture runs.
+- Both pages write through the same `architecture_runs.json` contract, so the
+  selected run stays synchronized with Review and Process Lab.
 
 ## Create A Run Manifest
 

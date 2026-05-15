@@ -1786,13 +1786,24 @@ HTML_TEMPLATE = """<!doctype html>
       <nav class="navTabs">
         <a id="reviewTab" href="#review">Review</a>
         <a id="architectureTab" href="#architecture">Architecture Lab</a>
+        <a id="experimentsTab" href="#experiments">Experiment Lab</a>
         <a id="metricsTab" href="#metrics">Metrics</a>
         <a id="qcTab" href="#process">Process Lab</a>
         <a id="reportTab" href="#report">Report</a>
       </nav>
+      <label class="modeToggle">Mode
+        <select id="uiMode">
+          <option value="basic">Basic</option>
+          <option value="advanced">Advanced</option>
+        </select>
+      </label>
+      <label class="reviewerField">Reviewer <input id="reviewerIdInput" type="text" placeholder="initials"></label>
+      <button id="nextMissingReviewerBtn" class="advancedOnly" type="button">Next Missing Reviewer</button>
+      <button id="stampSelectedReviewerBtn" class="advancedOnly" type="button">Stamp Selected</button>
+      <button id="stampMissingReviewerBtn" class="advancedOnly" type="button">Stamp Missing</button>
       <span id="saveState" class="saveState">loading</span>
     </div>
-    <div class="toolbar runSyncBar">
+    <div class="toolbar runSyncBar advancedOnly">
       <label>Review run <select id="activeRunSelect"></select></label>
       <span id="activeRunStatus" class="runSyncStatus">loading run status</span>
       <label>Backend
@@ -1809,16 +1820,37 @@ HTML_TEMPLATE = """<!doctype html>
       <button id="unlockGenerationBtn">Unlock Generation</button>
       <button id="refreshRunBtn">Refresh</button>
     </div>
-    <div id="runGeneratePanel" class="runGeneratePanel hidden"></div>
+    <div id="runGeneratePanel" class="runGeneratePanel hidden advancedOnly"></div>
     <div class="toolbar">
       <button id="playBtn">Play</button>
       <button id="fitBtn">Fit Width</button>
       <button id="fullscreenBtn">Fullscreen</button>
+      <button id="prevActiveFrameBtn">Prev Active</button>
+      <button id="nextActiveFrameBtn">Next Active</button>
+      <button id="exportScreenshotBtn">Screenshot</button>
+      <label>Workflow
+        <select id="reviewWorkflowPreset">
+          <option value="custom">Custom</option>
+          <option value="fast_triage">Fast triage</option>
+          <option value="event_validation">Event validation</option>
+          <option value="missed_neuron_search">Missed neuron search</option>
+          <option value="artifact_cleanup">Artifact cleanup</option>
+          <option value="mask_editing">Mask editing</option>
+        </select>
+      </label>
+      <button id="shortcutHelpBtn" type="button">Shortcuts</button>
+      <label>Jump <input id="quickJumpInput" type="search" placeholder="ROI 12 or f120"></label>
+      <button id="quickJumpBtn" type="button">Go</button>
+      <button id="undoAnnotationBtn" type="button">Undo Label</button>
+      <button id="bookmarkAddBtn" type="button">Bookmark</button>
+      <select id="bookmarkSelect" aria-label="Review bookmarks"></select>
+      <button id="bookmarkGoBtn" type="button">Open Mark</button>
+      <button id="bookmarkDeleteBtn" type="button">Delete Mark</button>
       <label>Frame <input id="frameSlider" type="range" min="1" max="{frames}" value="1"></label>
       <b id="frameLabel">1</b>
-      <label>Zoom <input id="zoom" type="range" min="0.75" max="5" step="0.05"> <span id="zoomLabel">3.00</span></label>
-      <label>Brightness <input id="brightness" type="range" min="0.4" max="2.5" step="0.02"> <span id="brightnessLabel">1.00</span></label>
-      <label>Contrast <input id="contrast" type="range" min="0.5" max="3" step="0.02"> <span id="contrastLabel">1.08</span></label>
+      <label class="advancedOnly">Zoom <input id="zoom" type="range" min="0.75" max="5" step="0.05"> <span id="zoomLabel">3.00</span></label>
+      <label class="advancedOnly">Brightness <input id="brightness" type="range" min="0.4" max="2.5" step="0.02"> <span id="brightnessLabel">1.00</span></label>
+      <label class="advancedOnly">Contrast <input id="contrast" type="range" min="0.5" max="3" step="0.02"> <span id="contrastLabel">1.08</span></label>
     </div>
     <div class="toolbar">
       <label><input id="showRois" type="checkbox" checked> ROIs</label>
@@ -1827,10 +1859,58 @@ HTML_TEMPLATE = """<!doctype html>
       <label><input id="showSuggestions" type="checkbox" checked> suggestions</label>
       <label><input id="showEvidence" type="checkbox"> evidence map</label>
       <select id="evidenceSelect"></select>
-      <label>Overlay <input id="overlayOpacity" type="range" min="0.1" max="1" step="0.02"> <span id="overlayOpacityLabel">0.72</span></label>
-      <label>event z <input id="eventThreshold" type="range" min="1.2" max="5" step="0.1"> <span id="eventThresholdLabel">2.4</span></label>
-      <label>Kalman gain <input id="kalmanGain" type="range" min="0.01" max="0.18" step="0.005"> <span id="kalmanGainLabel">0.060</span></label>
-      <label>spike gain <input id="spikeGain" type="range" min="0" max="0.05" step="0.002"> <span id="spikeGainLabel">0.008</span></label>
+      <label class="advancedOnly">Overlay <input id="overlayOpacity" type="range" min="0.1" max="1" step="0.02"> <span id="overlayOpacityLabel">0.72</span></label>
+      <label class="advancedOnly">Preset
+        <select id="overlayPresetSelect">
+          <option value="validate">Validate firing</option>
+          <option value="dense">Dense triage</option>
+          <option value="discovery">Discovery</option>
+          <option value="custom">Custom</option>
+        </select>
+      </label>
+      <label class="advancedOnly">Selected
+        <select id="selectedOverlayMode">
+          <option value="outline">Outline</option>
+          <option value="soft">Soft fill</option>
+          <option value="event">Event-aware</option>
+        </select>
+      </label>
+      <label class="advancedOnly">Selected fill <input id="selectedFillOpacity" type="range" min="0" max="0.85" step="0.01"> <span id="selectedFillOpacityLabel">0.10</span></label>
+      <label class="advancedOnly">Outline <input id="selectedOutlineWidth" type="range" min="1" max="5" step="0.5"> <span id="selectedOutlineWidthLabel">2.5</span></label>
+      <label class="advancedOnly">Focus
+        <select id="roiFocusMode">
+          <option value="all">All ROIs</option>
+          <option value="solo">Selected only</option>
+          <option value="neighbors">Nearby</option>
+        </select>
+      </label>
+      <label class="advancedOnly">Radius <input id="neighborRadiusPx" type="range" min="8" max="120" step="2"> <span id="neighborRadiusPxLabel">36</span></label>
+      <span id="focusSummary" class="hint"></span>
+      <label class="advancedOnly">event z <input id="eventThreshold" type="range" min="1.2" max="5" step="0.1"> <span id="eventThresholdLabel">2.4</span></label>
+      <label class="advancedOnly">Kalman gain <input id="kalmanGain" type="range" min="0.01" max="0.18" step="0.005"> <span id="kalmanGainLabel">0.060</span></label>
+      <label class="advancedOnly">spike gain <input id="spikeGain" type="range" min="0" max="0.05" step="0.002"> <span id="spikeGainLabel">0.008</span></label>
+      <label class="advancedOnly">Manual ROI
+        <select id="manualRoiMode">
+          <option value="select">Select</option>
+          <option value="center">Center</option>
+          <option value="circle">Circle</option>
+          <option value="lasso">Lasso</option>
+        </select>
+      </label>
+      <label class="advancedOnly">Manual radius <input id="manualRoiRadius" type="range" min="2" max="30" step="1"> <span id="manualRoiRadiusLabel">6</span></label>
+      <button id="manualRoiCancelBtn" class="advancedOnly" type="button">Cancel Manual</button>
+      <label class="advancedOnly">Edit ROI
+        <select id="roiEditMode">
+          <option value="off">Off</option>
+          <option value="brush_add">Brush add</option>
+          <option value="brush_erase">Brush erase</option>
+        </select>
+      </label>
+      <label class="advancedOnly">Brush <input id="roiEditBrushRadius" type="range" min="1" max="18" step="1"> <span id="roiEditBrushRadiusLabel">4</span></label>
+      <button id="roiEditDoneBtn" class="advancedOnly" type="button">Finish Edit</button>
+      <button id="roiEditUndoBtn" class="advancedOnly" type="button">Undo Mask</button>
+      <button id="roiEditRevertBtn" class="advancedOnly" type="button">Revert To Source</button>
+      <button id="materializeManualTracesBtn" class="advancedOnly" type="button">Materialize Traces</button>
     </div>
     <div class="viewerScroll" id="viewerScroll">
       <div class="viewerWrap" id="viewerWrap">
@@ -1843,9 +1923,41 @@ HTML_TEMPLATE = """<!doctype html>
       <span id="statusText" aria-live="polite"></span>
       <span id="selectionText" aria-live="polite"></span>
     </div>
+    <div id="shortcutOverlay" class="shortcutOverlay hidden" role="dialog" aria-modal="true" aria-labelledby="shortcutOverlayTitle">
+      <div class="shortcutPanel">
+        <div class="runCardHeader">
+          <h2 id="shortcutOverlayTitle">Keyboard Shortcuts</h2>
+          <button id="shortcutCloseBtn" type="button">Close</button>
+        </div>
+        <div class="shortcutGrid">
+          <div><b>Space</b><span>Play / pause</span></div>
+          <div><b>Left / Right</b><span>Previous / next frame</span></div>
+          <div><b>j / k</b><span>Next / previous ROI</span></div>
+          <div><b>n / p</b><span>Next / previous event</span></div>
+          <div><b>N / P</b><span>Next / previous event queue item</span></div>
+          <div><b>. / ,</b><span>Next / previous suggestion</span></div>
+          <div><b>v / V</b><span>Next / previous active frame</span></div>
+          <div><b>a / r / u</b><span>Accept / reject / unsure ROI</span></div>
+          <div><b>e / x</b><span>Accept / reject event</span></div>
+          <div><b>g / G</b><span>Promote suggestion / promote and next</span></div>
+          <div><b>m / M</b><span>Mark missed / mark missed and next</span></div>
+          <div><b>Ctrl/Cmd Z</b><span>Undo last label</span></div>
+          <div><b>0</b><span>Reset trace zoom</span></div>
+          <div><b>?</b><span>Show / hide this panel</span></div>
+        </div>
+      </div>
+    </div>
     <div class="reviewEvidenceGrid">
       <div class="traceBox">
+        <div class="traceControls">
+          <span id="traceWindowText">frames 1-{frames}</span>
+          <button id="traceFullBtn" type="button">Full</button>
+          <button id="traceEvent2sBtn" type="button">±2s</button>
+          <button id="traceEvent5sBtn" type="button">±5s</button>
+          <button id="traceResetZoomBtn" type="button">Reset zoom</button>
+        </div>
         <canvas id="traceCanvas" width="1000" height="260" role="img" aria-label="Selected ROI trace"></canvas>
+        <canvas id="eventTimelineCanvas" width="1000" height="72" role="img" aria-label="Visible event density timeline"></canvas>
         <div class="legend">
           <span><i class="dot" style="background:#2563eb"></i>dF/F</span>
           <span><i class="dot" style="background:#64748b"></i>Kalman baseline</span>
@@ -1889,6 +2001,7 @@ HTML_TEMPLATE = """<!doctype html>
       </div>
     </details>
     <h2>ROI Review</h2>
+    <section class="reviewSessionPanel" id="reviewSessionPanel" aria-label="Review session checklist"></section>
     <section class="guidedPanelShell">
       <div class="topbar">
         <h2>Guided Review</h2>
@@ -1900,11 +2013,22 @@ HTML_TEMPLATE = """<!doctype html>
       <button id="acceptBtn" class="accept">Accept</button>
       <button id="rejectBtn" class="reject">Reject</button>
       <button id="unsureBtn" class="unsure">Unsure</button>
+      <button id="acceptNextBtn" class="accept">Accept + Next</button>
+      <button id="rejectNextBtn" class="reject">Reject + Next</button>
+      <button id="unsureNextBtn" class="unsure">Unsure + Next</button>
+      <button id="strongNeuronNextBtn" class="accept">Strong Neuron + Next</button>
+      <button id="artifactRoiNextBtn" class="reject">Artifact ROI + Next</button>
       <button id="clearBtn">Clear</button>
       <button id="deleteBtn">Hide ROI</button>
     </div>
-    <textarea id="roiNotes" rows="3" placeholder="Notes for selected ROI"></textarea>
     <div class="toolbar">
+      <button id="nextActiveRoiBtn">Next Active ROI</button>
+      <button id="nextUncertainRoiBtn">Next Uncertain</button>
+      <button id="nextArtifactRiskBtn">Next Artifact Risk</button>
+      <button id="missedNeuronModeBtn">Missed Mode</button>
+    </div>
+    <textarea id="roiNotes" rows="3" placeholder="Notes for selected ROI"></textarea>
+    <div class="toolbar advancedOnly">
       <select id="traceQuality">
         <option value="">Trace quality</option>
         <option value="good">Good trace</option>
@@ -1939,9 +2063,19 @@ HTML_TEMPLATE = """<!doctype html>
         <option value="redraw_needed">Redraw needed</option>
       </select>
       <input id="identityGroup" placeholder="Identity group" style="height:31px;border:1px solid var(--line);border-radius:6px;padding:0 8px;max-width:130px">
+      <select id="roiConfidence">
+        <option value="">Confidence</option>
+        <option value="high">High</option>
+        <option value="medium">Medium</option>
+        <option value="low">Low</option>
+      </select>
+      <input id="roiReasonTags" placeholder="Reason tags" style="height:31px;border:1px solid var(--line);border-radius:6px;padding:0 8px;max-width:150px">
     </div>
-    <div class="toolbar">
+    <div class="toolbar advancedOnly">
       <span class="hint"><b id="multiSelectCount">1</b> selected</span>
+      <button id="bulkAcceptBtn">Accept Selected</button>
+      <button id="bulkRejectBtn">Reject Selected</button>
+      <button id="bulkUnsureBtn">Unsure Selected</button>
       <input id="bulkIdentityGroup" placeholder="Group selected" style="height:31px;border:1px solid var(--line);border-radius:6px;padding:0 8px;max-width:135px">
       <button id="bulkIdentityBtn">Set Group</button>
       <select id="bulkNeedsAction">
@@ -1961,9 +2095,29 @@ HTML_TEMPLATE = """<!doctype html>
       <button id="eventAcceptBtn" class="accept">Accept Event</button>
       <button id="eventRejectBtn" class="reject">Reject Event</button>
       <button id="eventUnsureBtn" class="unsure">Unsure</button>
+      <button id="eventAcceptNextBtn" class="accept">Accept + Next</button>
+      <button id="eventRejectNextBtn" class="reject">Reject + Next</button>
+      <button id="eventUnsureNextBtn" class="unsure">Unsure + Next</button>
+      <button id="eventArtifactNextBtn" class="reject">Artifact + Next</button>
       <button id="eventClearBtn">Clear</button>
     </div>
     <div class="toolbar">
+      <select id="eventQueueSelect">
+        <option value="all">All events</option>
+        <option value="unlabeled">Unlabeled events</option>
+        <option value="accepted">Accepted events</option>
+        <option value="rejected">Rejected events</option>
+        <option value="unsure">Unsure events</option>
+        <option value="highZ">High-z events</option>
+        <option value="missingReviewer">Missing reviewer ID</option>
+        <option value="reviewedByMe">Reviewed by me</option>
+        <option value="reviewedByOther">Reviewed by other</option>
+      </select>
+      <button id="eventQueuePrevBtn">Prev Event Queue</button>
+      <button id="eventQueueNextBtn">Next Event Queue</button>
+      <span id="eventQueueStatusText" class="hint">0 events</span>
+    </div>
+    <div class="toolbar advancedOnly">
       <select id="eventType">
         <option value="">Event type</option>
         <option value="clear_transient">Clear transient</option>
@@ -1977,18 +2131,32 @@ HTML_TEMPLATE = """<!doctype html>
         <option value="ambiguous">Ambiguous</option>
         <option value="slow_transient">Slow transient</option>
       </select>
+      <select id="eventConfidence">
+        <option value="">Confidence</option>
+        <option value="high">High</option>
+        <option value="medium">Medium</option>
+        <option value="low">Low</option>
+      </select>
+      <input id="eventReasonTags" placeholder="Reason tags" style="height:31px;border:1px solid var(--line);border-radius:6px;padding:0 8px;max-width:150px">
     </div>
     <textarea id="eventNotes" rows="2" placeholder="Notes for selected event"></textarea>
     <div class="eventList" id="eventList"></div>
-    <details>
+    <details id="discoveryDetails" class="advancedOnly">
       <summary>Discovery Suggestions</summary>
       <div class="buttonRow">
         <button id="suggestionPromoteBtn" class="accept">Promote</button>
+        <button id="suggestionPromoteNextBtn" class="accept">Promote + Next</button>
         <button id="suggestionMissedBtn">Missed Neuron</button>
+        <button id="suggestionMissedNextBtn">Missed + Next</button>
+        <button id="suggestionDuplicateBtn">Duplicate</button>
+        <button id="suggestionDuplicateNextBtn">Duplicate + Next</button>
         <button id="suggestionArtifactBtn" class="reject">Artifact</button>
+        <button id="suggestionArtifactNextBtn" class="reject">Artifact + Next</button>
         <button id="suggestionUnsureBtn" class="unsure">Unsure</button>
+        <button id="suggestionUnsureNextBtn" class="unsure">Unsure + Next</button>
         <button id="suggestionClearBtn">Clear</button>
       </div>
+      <div id="suggestionContextCard"></div>
       <select id="artifactClass" style="width:100%;margin:6px 0;height:30px">
         <option value="">Artifact class</option>
         <option value="vessel_static_structure">Vessel/static structure</option>
@@ -2001,6 +2169,15 @@ HTML_TEMPLATE = """<!doctype html>
       </select>
       <textarea id="suggestionNotes" rows="2" placeholder="Notes for selected discovery suggestion"></textarea>
       <div class="toolbar">
+        <select id="suggestionConfidence">
+          <option value="">Confidence</option>
+          <option value="high">High</option>
+          <option value="medium">Medium</option>
+          <option value="low">Low</option>
+        </select>
+        <input id="suggestionReasonTags" placeholder="Reason tags" style="height:31px;border:1px solid var(--line);border-radius:6px;padding:0 8px;max-width:160px">
+      </div>
+      <div class="toolbar">
         <select id="discoveryQueueSelect">
           <option value="all">All suggestions</option>
           <option value="unlabeled">Unlabeled</option>
@@ -2008,12 +2185,18 @@ HTML_TEMPLATE = """<!doctype html>
           <option value="missed">Marked missed</option>
           <option value="artifact">Artifacts</option>
           <option value="artifactSuspects">Artifact suspects</option>
+          <option value="missingReviewer">Missing reviewer ID</option>
+          <option value="reviewedByMe">Reviewed by me</option>
+          <option value="reviewedByOther">Reviewed by other</option>
         </select>
+        <button id="suggestionQueuePrevBtn">Prev Suggestion</button>
+        <button id="suggestionQueueNextBtn">Next Suggestion</button>
+        <span id="suggestionQueueStatusText" class="hint">0 suggestions</span>
       </div>
       <div class="suggestionList" id="suggestionList"></div>
     </details>
     <h2>Review Queue</h2>
-    <div class="toolbar">
+    <div class="toolbar advancedOnly">
       <select id="queueSelect">
         <option value="unlabeled">Unlabeled first</option>
         <option value="annotationBatch">Next annotation batch</option>
@@ -2033,6 +2216,9 @@ HTML_TEMPLATE = """<!doctype html>
         <option value="accepted">Accepted</option>
         <option value="rejected">Rejected</option>
         <option value="unsure">Unsure</option>
+        <option value="missingReviewer">Missing reviewer ID</option>
+        <option value="reviewedByMe">Reviewed by me</option>
+        <option value="reviewedByOther">Reviewed by other</option>
         <option value="deleted">Hidden</option>
         <option value="needsAction">Needs action</option>
         <option value="controlReady">Control-ready</option>
@@ -2041,19 +2227,45 @@ HTML_TEMPLATE = """<!doctype html>
       </select>
       <label>area >= <input id="minArea" type="range" min="0" max="260" step="1"> <span id="minAreaLabel">0</span></label>
       <label>events >= <input id="minEvents" type="range" min="0" max="12" step="1"> <span id="minEventsLabel">0</span></label>
+      <button id="queuePrevBtn">Prev Queue</button>
+      <button id="queueNextBtn">Next Queue</button>
+      <span id="queueStatusText" class="hint">0 queued</span>
     </div>
     <div class="roiList" id="roiList"></div>
-    <details>
+    <details class="advancedOnly">
+      <summary>Parameter Snapshots</summary>
+      <div class="toolbar">
+        <select id="parameterSnapshotSelect"></select>
+        <button id="snapshotSaveBtn">Save Snapshot</button>
+        <button id="snapshotRestoreBtn">Restore</button>
+        <button id="snapshotDeleteBtn">Delete</button>
+      </div>
+      <p id="snapshotSummary" class="hint"></p>
+    </details>
+    <details class="advancedOnly">
+      <summary>Autosave Recovery</summary>
+      <div class="toolbar">
+        <select id="recoverySnapshotSelect"></select>
+        <button id="recoveryRestoreBtn">Restore</button>
+        <button id="recoveryDownloadBtn">Download</button>
+      </div>
+      <p id="recoverySnapshotSummary" class="hint"></p>
+    </details>
+    <details class="advancedOnly">
       <summary>Export</summary>
       <div class="buttonRow">
         <button id="exportRoiBtn">Export ROI TSV</button>
         <button id="exportEventBtn">Export Event TSV</button>
         <button id="exportSuggestionBtn">Export Discovery TSV</button>
         <button id="exportSplitMergeBtn">Export Split/Merge TSV</button>
+        <button id="exportActiveRoiQueueBtn">Export ROI Queue</button>
+        <button id="exportActiveEventQueueBtn">Export Event Queue</button>
+        <button id="exportActiveSuggestionQueueBtn">Export Suggestion Queue</button>
         <button id="exportJsonBtn">Export JSON</button>
+        <button id="exportProvenanceAuditBtn">Export Provenance Audit</button>
       </div>
     </details>
-    <details>
+    <details class="advancedOnly">
       <summary>Parameters</summary>
       <table class="smallTable" id="paramTable"></table>
     </details>
@@ -2065,6 +2277,7 @@ HTML_TEMPLATE = """<!doctype html>
       <nav class="navTabs">
         <a id="reviewTabArch" href="#review">Review</a>
         <a id="architectureTabArch" href="#architecture">Architecture Lab</a>
+        <a id="experimentsTabArch" href="#experiments">Experiment Lab</a>
         <a id="metricsTabArch" href="#metrics">Metrics</a>
         <a id="qcTabArch" href="#process">Process Lab</a>
         <a id="reportTabArch" href="#report">Report</a>
@@ -2136,12 +2349,27 @@ HTML_TEMPLATE = """<!doctype html>
       </div>
     </div>
   </section>
+  <section id="experimentsPage" class="architecturePage hidden">
+    <div class="topbar">
+      <h1>Experiment Lab: {dataset_id}</h1>
+      <nav class="navTabs">
+        <a id="reviewTabExperiments" href="#review">Review</a>
+        <a id="architectureTabExperiments" href="#architecture">Architecture Lab</a>
+        <a id="experimentsTabExperiments" href="#experiments">Experiment Lab</a>
+        <a id="metricsTabExperiments" href="#metrics">Metrics</a>
+        <a id="qcTabExperiments" href="#process">Process Lab</a>
+        <a id="reportTabExperiments" href="#report">Report</a>
+      </nav>
+    </div>
+    <div id="experimentLab"></div>
+  </section>
   <section id="metricsPage" class="architecturePage hidden">
     <div class="topbar">
       <h1>Metrics/Audit: {dataset_id}</h1>
       <nav class="navTabs">
         <a id="reviewTabMetrics" href="#review">Review</a>
         <a id="architectureTabMetrics" href="#architecture">Architecture Lab</a>
+        <a id="experimentsTabMetrics" href="#experiments">Experiment Lab</a>
         <a id="metricsTabMetrics" href="#metrics">Metrics</a>
         <a id="qcTabMetrics" href="#process">Process Lab</a>
         <a id="reportTabMetrics" href="#report">Report</a>
@@ -2156,6 +2384,7 @@ HTML_TEMPLATE = """<!doctype html>
       <nav class="navTabs">
         <a id="reviewTabQc" href="#review">Review</a>
         <a id="architectureTabQc" href="#architecture">Architecture Lab</a>
+        <a id="experimentsTabQc" href="#experiments">Experiment Lab</a>
         <a id="metricsTabQc" href="#metrics">Metrics</a>
         <a id="qcTabQc" href="#process">Process Lab</a>
         <a id="reportTabQc" href="#report">Report</a>
@@ -2170,6 +2399,7 @@ HTML_TEMPLATE = """<!doctype html>
       <nav class="navTabs">
         <a id="reviewTabReport" href="#review">Review</a>
         <a id="architectureTabReport" href="#architecture">Architecture Lab</a>
+        <a id="experimentsTabReport" href="#experiments">Experiment Lab</a>
         <a id="metricsTabReport" href="#metrics">Metrics</a>
         <a id="qcTabReport" href="#process">Process Lab</a>
         <a id="reportTabReport" href="#report">Report</a>

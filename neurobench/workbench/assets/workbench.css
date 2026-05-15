@@ -45,6 +45,36 @@ body {
 .app.qc-mode .reviewOnly {
   display: none;
 }
+.app.basic-ui .advancedOnly {
+  display: none !important;
+}
+.modeToggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: #ffffff;
+  padding: 3px 7px;
+  color: #334155;
+  font-weight: 700;
+}
+.modeToggle select {
+  height: 25px;
+  border-radius: 999px;
+}
+.reviewerField {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: #334155;
+  font-size: 12px;
+  font-weight: 700;
+}
+.reviewerField input {
+  width: 92px;
+  height: 27px;
+}
 .hidden {
   display: none !important;
 }
@@ -108,6 +138,20 @@ h2 {
   border-color: #7dd3fc;
   color: #075985;
 }
+.textButton {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 31px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: #ffffff;
+  padding: 0 9px;
+  color: var(--ink);
+  font-size: 12px;
+  font-weight: 700;
+  text-decoration: none;
+}
 .toolbar {
   background: rgba(255, 255, 255, 0.82);
   border: 1px solid var(--line);
@@ -116,7 +160,10 @@ h2 {
   box-shadow: 0 1px 0 rgba(255, 255, 255, 0.7) inset;
 }
 button,
-select {
+select,
+input[type="search"],
+input[type="text"],
+input[type="number"] {
   height: 31px;
   border: 1px solid var(--line);
   background: #ffffff;
@@ -126,6 +173,9 @@ select {
   font-weight: 600;
   font-size: 12px;
   box-shadow: 0 1px 1px rgba(15, 23, 42, 0.04);
+}
+input[type="search"] {
+  width: 132px;
 }
 button.active,
 button:hover {
@@ -197,6 +247,53 @@ input[type="range"] {
   color: var(--muted);
   font-size: 12px;
   min-height: 16px;
+}
+.shortcutOverlay {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  display: grid;
+  place-items: center;
+  padding: 18px;
+  background: rgba(15, 23, 42, 0.58);
+}
+.shortcutPanel {
+  width: min(720px, 96vw);
+  max-height: 90vh;
+  overflow: auto;
+  background: #ffffff;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 14px;
+  box-shadow: 0 24px 60px rgba(15, 23, 42, 0.28);
+}
+.shortcutPanel h2 {
+  margin: 0;
+}
+.shortcutGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+  gap: 8px;
+  margin-top: 12px;
+}
+.shortcutGrid div {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  align-items: center;
+  border: 1px solid #e2e8f0;
+  border-radius: 7px;
+  padding: 8px;
+  background: #f8fafc;
+}
+.shortcutGrid b {
+  color: #0f172a;
+  white-space: nowrap;
+}
+.shortcutGrid span {
+  color: var(--muted);
+  font-size: 12px;
+  text-align: right;
 }
 .traceBox {
   background: #fff;
@@ -270,6 +367,38 @@ input[type="range"] {
   display: block;
   width: 100%;
   height: 240px;
+  cursor: crosshair;
+  border: 1px solid #dbe4ef;
+  border-radius: 7px;
+  background: #ffffff;
+  touch-action: none;
+}
+#eventTimelineCanvas {
+  display: block;
+  width: 100%;
+  height: 72px;
+  margin-top: 6px;
+  cursor: crosshair;
+  border: 1px solid #dbe4ef;
+  border-radius: 7px;
+  background: #ffffff;
+  touch-action: none;
+}
+.traceControls {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 6px;
+  color: var(--muted);
+  font-size: 12px;
+}
+.traceControls span {
+  margin-right: auto;
+}
+.traceControls button {
+  height: 27px;
+  padding: 0 8px;
 }
 .legend {
   display: flex;
@@ -330,6 +459,102 @@ details[open] > summary {
   padding: 9px;
   margin: 8px 0 12px;
 }
+.reviewSessionPanel {
+  border: 1px solid #cbd5e1;
+  background: linear-gradient(180deg, #ffffff 0%, #f8fafc 100%);
+  border-radius: 8px;
+  padding: 10px;
+  margin: 8px 0 12px;
+}
+.sessionHeader,
+.sessionProgressLabel {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.sessionHeader h2 {
+  margin: 0 0 3px;
+}
+.sessionStatusGrid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px;
+  margin: 8px 0;
+}
+.sessionStatus {
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  padding: 6px 7px;
+  background: #ffffff;
+}
+.sessionStatus span,
+.sessionQueueGrid span {
+  display: block;
+  color: var(--muted);
+  font-size: 11px;
+}
+.sessionStatus b {
+  display: block;
+  overflow: hidden;
+  color: #0f172a;
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.sessionStatus.ok {
+  border-color: #86efac;
+  background: #f0fdf4;
+}
+.sessionStatus.warn {
+  border-color: #fcd34d;
+  background: #fffbeb;
+}
+.sessionStatus.bad {
+  border-color: #fca5a5;
+  background: #fef2f2;
+}
+.sessionProgress {
+  margin-top: 8px;
+}
+.sessionProgressLabel {
+  margin-bottom: 4px;
+  color: #334155;
+  font-size: 12px;
+}
+.sessionProgressBar {
+  height: 7px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: #e2e8f0;
+}
+.sessionProgressFill {
+  height: 100%;
+  border-radius: 999px;
+  background: #0284c7;
+}
+.sessionQueueGrid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 6px;
+  margin: 9px 0;
+}
+.sessionQueueGrid span {
+  border: 1px solid #e2e8f0;
+  border-radius: 7px;
+  background: #ffffff;
+  padding: 6px;
+}
+.sessionQueueGrid b {
+  display: block;
+  color: #0f172a;
+  font-size: 11px;
+}
+.sessionChecklistActions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
 #reviewModeToggle.guidedActive {
   background: #0f172a;
   color: #ffffff;
@@ -359,6 +584,24 @@ details[open] > summary {
   padding: 2px 7px;
   font-size: 11px;
   font-weight: 700;
+}
+.guidedQuickActions {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(112px, 1fr));
+  gap: 6px;
+  margin-top: 9px;
+}
+.guidedQuickActions button {
+  min-height: 32px;
+  border-color: #bae6fd;
+  background: #f0f9ff;
+  color: #0f172a;
+  font-weight: 700;
+}
+.guidedQuickActions button:hover,
+.guidedQuickActions button:focus-visible {
+  background: #e0f2fe;
+  border-color: #38bdf8;
 }
 .goalGrid {
   display: grid;
@@ -565,6 +808,59 @@ textarea {
   margin: 0 0 8px;
   font-size: 15px;
 }
+.experimentHero {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  margin: 16px 0;
+  padding: 14px;
+  border: 1px solid #cbd5e1;
+  border-radius: 8px;
+  background: #ffffff;
+}
+.experimentHero h2 {
+  margin-top: 0;
+}
+.experimentGrid {
+  display: grid;
+  grid-template-columns: minmax(280px, 1fr) minmax(260px, 0.8fr) minmax(320px, 1.2fr);
+  gap: 14px;
+  margin-bottom: 14px;
+}
+#experimentManifestPreview {
+  max-height: 360px;
+  overflow: auto;
+}
+.robustnessGallery,
+.validationBenchmarkPanel,
+.adjudicationPanel {
+  margin: 14px 0;
+}
+.exampleGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+  gap: 10px;
+}
+.exampleCard {
+  border: 1px solid #dbeafe;
+  border-radius: 8px;
+  background: #f8fafc;
+  padding: 10px;
+}
+.exampleCard.muted {
+  opacity: 0.72;
+}
+.adjudicationInputs {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+.adjudicationInputs input[type="file"] {
+  max-width: 230px;
+}
 .annotationBatchCard {
   margin: 12px 0;
 }
@@ -638,6 +934,65 @@ textarea {
 .compareTable td.deltaNeutral {
   color: #334155;
   font-weight: 700;
+}
+.abReviewShell {
+  border-top: 1px solid #e2e8f0;
+  margin-top: 12px;
+  padding-top: 12px;
+}
+.abReviewGrid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(280px, 1fr));
+  gap: 12px;
+  margin-top: 10px;
+}
+.abReviewPane {
+  min-width: 0;
+  border: 1px solid #dbe4ef;
+  background: #f8fafc;
+  border-radius: 8px;
+  padding: 9px;
+}
+.abReviewPane.missing {
+  background: #fff7ed;
+  border-color: #fed7aa;
+}
+.abReviewMissing {
+  display: grid;
+  place-items: center;
+  min-height: 180px;
+  color: #9a3412;
+  font-size: 13px;
+  border: 1px dashed #fdba74;
+  border-radius: 7px;
+}
+.abFrame {
+  position: relative;
+  overflow: hidden;
+  margin-top: 8px;
+  background: #08111f;
+  border: 1px solid #0f172a;
+  border-radius: 8px;
+}
+.abFrame img,
+.abOverlay {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+}
+.abFrame img {
+  object-fit: fill;
+}
+.abOverlay {
+  pointer-events: none;
+}
+.abOverlay circle {
+  vector-effect: non-scaling-stroke;
+  opacity: 0.88;
+}
+.abOverlay circle.eventNow {
+  filter: drop-shadow(0 0 3px rgba(250, 204, 21, 0.9));
 }
 .pipelineBuilderGrid {
   display: grid;
@@ -1194,6 +1549,7 @@ textarea {
   .selectedRoiPanel { max-height: none; }
   .pipelineBuilderGrid,
   .pipelineBuilderGrid.bottom { grid-template-columns: 1fr; }
+  .abReviewGrid { grid-template-columns: 1fr; }
   .qcWorkbench { grid-template-columns: 1fr; }
   .qcFrameShell { min-height: 320px; }
   .runGeneratePanel { grid-template-columns: 1fr; }

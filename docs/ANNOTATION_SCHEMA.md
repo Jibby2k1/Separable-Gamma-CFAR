@@ -16,20 +16,37 @@ Each ROI annotation may include:
 - `artifact_class`: free artifact/category label
 - `identity_group`: optional grouping for duplicate/split/merged identities
 - `needs_action`: review/edit flag such as `split_needed` or `redraw_needed`
+- `confidence`: `high`, `medium`, `low`, or empty
+- `reason_tags`: short reviewer rationale tags such as `compact`, `manual`,
+  `artifact_risk`, or `needs_second_review`
+- `reviewer_id`: reviewer initials/name copied from the dashboard reviewer
+  field when the label was last edited
+- `updatedAt`: timestamp for the most recent dashboard edit to that annotation
 - `notes`
 - `deleted`
 
 ## Virtual ROI Fields
 
-Intent-first edits that combine multiple source ROIs are stored in
-`virtualRois`. A virtual merge may include:
+Intent-first edits and manual ROI footprints are stored in `virtualRois`. A
+virtual ROI may include:
 
 - `id`: virtual ROI ID such as `VM_4_7`
-- `roi_kind`: `virtual_merge`
+- `roi_kind`: `virtual_merge`, `manual_center`, `manual_circle`,
+  `manual_lasso`, `manual_edit`, or another annotation-layer ROI kind
 - `source_roi_ids`: source ROI IDs included in the merge
+- `provenance`: origin of the virtual footprint, such as `manual_overlay` or
+  `roi_brush_edit`
+- `points`, `bbox`, `area`, `centroidX`, and `centroidY` for manual or generated
+  virtual footprints
+- optional materialized trace fields: `rawTrace`, `backgroundTrace`,
+  `dffTrace`, `baselineTrace`, `eventTrace`, `zTrace`, `events`, `noiseSigma`,
+  `traceSnr`, `backgroundCorrelation`, and `trace_materialization`
+- `edit_history`: optional bounded list of previous geometry snapshots used by
+  browser-side mask undo/revert controls
 - `identity_group`: shared neuron identity/group label
 - label fields such as `cell_state`, `trace_quality`, `control_ready`,
-  `artifact_class`, and `notes`
+  `artifact_class`, `confidence`, `reason_tags`, `reviewer_id`, `updatedAt`,
+  and `notes`
 
 Virtual ROIs do not rewrite source footprints in `review_data.json`. They are
 annotation-layer instructions for downstream export and future rebuilds.
@@ -43,6 +60,23 @@ Each event annotation may include:
   empty
 - `event_type`: clear, weak, slow, artifact, or future labels
 - `timing_quality`: `clear_frame`, `ambiguous`, `slow_transient`, or empty
+- `confidence`: `high`, `medium`, `low`, or empty
+- `reason_tags`: short reviewer rationale tags
+- `reviewer_id`
+- `updatedAt`
+- `notes`
+
+## Suggestion Fields
+
+Discovery suggestion annotations may include:
+
+- `state`: `promoted`, `missed`, `artifact`, `unsure`, or empty
+- `artifact_class`: artifact/category label when rejected as artifact
+- `confidence`: `high`, `medium`, `low`, or empty
+- `reason_tags`: rationale tags such as `manual`, `duplicate`, or
+  `needs_second_review`
+- `reviewer_id`
+- `updatedAt`
 - `notes`
 
 ## Migration
@@ -57,7 +91,8 @@ unsure -> unsure
 ```
 
 Use `tools/export_annotations.py` to write a migrated `annotations_v3.json` plus
-ROI and event TSV files.
+ROI and event TSV files. The dashboard's browser-side TSV exports also include
+`reviewer_id` and `updatedAt` for ROI, event, suggestion, and split/merge rows.
 
 ## Run-Scoped Labels
 
@@ -67,6 +102,17 @@ those maps under `runs[run_id]` so labels from one architecture run are not
 mixed into another run with different ROI IDs or event calls. Older
 single-run `annotations.json` files are migrated into the baseline run when the
 dashboard opens.
+
+## Review Bookmarks
+
+`bookmarks` is a lightweight browser/workbench revisit list. Each entry stores:
+
+- `id`, `label`, and `createdAt`
+- `runId`
+- `frame`
+- optional `roiId`, `eventFrame`, and `suggestionId`
+
+Bookmarks are navigation aids. They do not count as scientific labels.
 
 ## Review Stats
 
@@ -78,6 +124,43 @@ The browser records lightweight review-session metadata in `reviewStats`:
   labels, suggestion labels, and v3 field changes
 
 These fields are for workflow auditing only. They are not scientific labels.
+
+## Reviewer Provenance
+
+The Review toolbar includes a `Reviewer` field. When set, new ROI, event,
+suggestion, virtual ROI, and split/merge edits are stamped with `reviewer_id`
+and `updatedAt`. This is lightweight provenance for lab workflows and
+inter-rater comparison; reviewer identity is still configurable per exported
+annotation file when using `tools/compare_annotations.py`.
+
+For existing annotation files, use the offline backfill helper to stamp reviewed
+labels that are missing reviewer provenance:
+
+```bash
+python3 tools/backfill_reviewer_ids.py \
+  --annotations Outputs/NeuronReview/calcium_rest_cropped/app/annotations.json \
+  --reviewer-id reviewer_a \
+  --out Outputs/NeuronReview/calcium_rest_cropped/app/annotations_reviewer_a.json
+```
+
+Use `--run-id RUN_ID` for one run-scoped bucket, `--all-runs` for every run
+bucket, or `--in-place` only when intentionally modifying the source file. Use
+`--dry-run --summary-json reviewer_backfill_summary.json` to inspect how many
+items would be stamped before writing a modified annotation file.
+
+To audit reviewer coverage without choosing a reviewer ID:
+
+```bash
+python3 tools/backfill_reviewer_ids.py \
+  --annotations Outputs/NeuronReview/calcium_rest_cropped/app/annotations.json \
+  --audit-only \
+  --summary-json reviewer_provenance_audit.json
+```
+
+The dashboard can also export a browser-side reviewer provenance audit from the
+Export panel or Report page. That audit is intended for quick lab handoff: it
+contains stamped/missing counts by label type, per-reviewer contribution counts,
+and the reviewed labels that still lack `reviewer_id`.
 
 ## Review UI State
 
